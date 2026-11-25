@@ -232,6 +232,7 @@ pub fn Composer(d: Draft, on_close: Callback<()>) -> impl IntoView {
             if let Some(t) = ta.get_untracked() {
                 let _ = t.focus();
                 let _ = t.set_selection_range(0, 0);
+                t.set_scroll_top(0);
             }
         } else if let Some(i) = to_ref.get_untracked() {
             let _ = i.focus();

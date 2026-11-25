@@ -721,7 +721,7 @@ fn Mail(side: Pane) -> impl IntoView {
                         <button type="button" class="btn primary" title="New email (c)" on:click=move |_| cx.compose(Draft::default())><Icon name="edit" size=14/>"New"</button>
                         {move || {
                             tick.track();
-                            cx.meta.with(|m| m.as_ref().map(|m| m.last_run).filter(|t| *t > 0)).map(|t| view! { <span class="subdue small ml-synced" title="Last sync">{format!("synced {} ago", ago(t))}</span> })
+                            cx.meta.with(|m| m.as_ref().map(|m| m.last_run).filter(|t| *t > 0)).map(|t| view! { <span class="subdue small ml-synced" title="Last sync">{match ago(t).as_str() { "now" => "synced just now".to_string(), x => format!("synced {x} ago") }}</span> })
                         }}
                         <button type="button" class="icon-btn" title="Sync now" aria-label="Sync now" disabled=move || syncing.get() on:click=sync_now>
                             <Icon name="refresh" class=Signal::derive(move || if syncing.get() { "spin".to_string() } else { String::new() })/>

@@ -686,7 +686,9 @@ pub fn rgb_of(css: &str) -> String {
         let c = web_sys::window()?.document()?.create_element("canvas").ok()?.dyn_into::<web_sys::HtmlCanvasElement>().ok()?;
         c.set_width(1);
         c.set_height(1);
-        c.get_context("2d").ok()??.dyn_into().ok()
+        let o = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&o, &"willReadFrequently".into(), &true.into());
+        c.get_context_with_context_options("2d", &o).ok()??.dyn_into().ok()
     }); }
     PX.with(|px| {
         let Some(px) = px else { return computed.clone() };

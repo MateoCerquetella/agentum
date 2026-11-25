@@ -98,7 +98,7 @@ fn Today() -> impl IntoView {
         });
     };
     // A pending brief (being written) is asked for again every 4 s.
-    fn load(b: RwSignal<Option<Value>>, err: RwSignal<String>, busy: RwSignal<bool>, poll: StoredValue<Option<SendWrapper<gloo_timers::callback::Timeout>>>, refresh: bool, after: impl Fn(bool) + 'static) {
+    fn load(b: RwSignal<Option<Value>>, err: RwSignal<String>, busy: RwSignal<bool>, poll: StoredValue<Option<SendWrapper<gloo_timers::callback::Timeout>>>, refresh: bool, after: std::rc::Rc<dyn Fn(bool)>) {
         poll.set_value(None);
         busy.set(true);
         spawn_local(async move {
@@ -117,14 +117,14 @@ fn Today() -> impl IntoView {
                 let _ = b.try_set(Some(nb));
                 let _ = err.try_set(String::new());
                 if pending {
-                    let _ = poll.try_set_value(Some(SendWrapper::new(gloo_timers::callback::Timeout::new(4000, move || load(b, err, busy, poll, false, |_| {})))));
+                    let _ = poll.try_set_value(Some(SendWrapper::new(gloo_timers::callback::Timeout::new(4000, move || load(b, err, busy, poll, false, std::rc::Rc::new(|_| {}))))));
                 }
             }
             let _ = busy.try_set(false);
             after(refresh);
         });
     }
-    let load_brief = move |refresh: bool| load(b, err, busy, poll, refresh, load_assist);
+    let load_brief = move |refresh: bool| load(b, err, busy, poll, refresh, std::rc::Rc::new(load_assist));
     // The strip's two weeks of events, your to-dos and the mail waiting on you.
     let load_events = move || {
         let s = start.get_untracked();
@@ -289,89 +289,111 @@ fn Today() -> impl IntoView {
         load_brief(false);
     });
 
-    let body = move || {
+    // Built once the brief is in; each part below redraws on its own (a whole-page redraw would
+    // replay the rise animations and type the headline again).
+    let loaded = Memo::new(move |_| b.with(Option::is_some));
+    let is_t = Memo::new(move |_| sel.get() == today.get());
+    let brief_today = Memo::new(move |_| b.with(|b| b.as_ref().and_then(|b| b["day"].as_str().map(str::to_string))) == Some(today.get()));
+    // Today's events come from the brief (with the weather at each); other days from the calendar.
+    let events = Memo::new(move |_| {
+        let sl = sel.get();
+        if is_t.get() && brief_today.get() {
+            b.with(|b| b.as_ref().and_then(|b| b["timed"].as_array().map(|a| a.iter().map(Ev::of).collect())).unwrap_or_default())
+        } else {
+            occ.with(|o| o.iter().filter(|x| x["all_day"] != true && days_of(x).contains(&sl)).map(|x| Ev::of_occ(x, &sl)).collect::<Vec<_>>())
+        }
+    });
+    let all_day = Memo::new(move |_| {
+        let sl = sel.get();
+        let title = |x: &Value| x["title"].as_str().unwrap_or("").to_string();
+        if is_t.get() && brief_today.get() {
+            b.with(|b| b.as_ref().and_then(|b| b["all_day"].as_array().map(|a| a.iter().map(title).collect())).unwrap_or_default())
+        } else {
+            occ.with(|o| o.iter().filter(|x| x["all_day"] == true && days_of(x).contains(&sl)).map(title).collect::<Vec<_>>())
+        }
+    });
+    let text = Memo::new(move |_| b.with(|b| b.as_ref().and_then(|b| b["text"].as_str()).unwrap_or("").to_string()));
+    let greet = move || {
         tick.track();
-        let Some(bv) = b.get() else {
-            let e = err.get();
-            return view! {
-                <main class="td-main"><section class="td-card"><div class="td-say">{if e.is_empty() { c.t("Writing your brief…") } else { format!("{} ({e}).", c.t("Could not load the brief")) }}</div></section></main>
-            }
-            .into_any();
-        };
-        let (td, sl) = (today.get(), sel.get());
-        let is_t = sl == td;
-        // Today's events come from the brief (with the weather at each); other days from the calendar.
-        let brief_today = bv["day"].as_str() == Some(td.as_str());
-        let events: Vec<Ev> = if is_t && brief_today {
-            bv["timed"].as_array().into_iter().flatten().map(Ev::of).collect()
-        } else {
-            occ.with(|o| o.iter().filter(|x| x["all_day"] != true && days_of(x).contains(&sl)).map(|x| Ev::of_occ(x, &sl)).collect())
-        };
-        let all_day: Vec<String> = if is_t && brief_today {
-            bv["all_day"].as_array().into_iter().flatten().map(|x| x["title"].as_str().unwrap_or("").to_string()).collect()
-        } else {
-            occ.with(|o| o.iter().filter(|x| x["all_day"] == true && days_of(x).contains(&sl)).map(|x| x["title"].as_str().unwrap_or("").to_string()).collect())
-        };
+        let (td, sl, t) = (today.get(), sel.get(), is_t.get());
         let nm = now_min();
-        let ts = todos.get();
-        let open_on = ts.iter().filter(|t| !t.done && due_of(&t.due).is_some_and(|d| d.day == sl || (is_t && d.day < td))).count();
-        let matters_all = bv["matters"].as_array().cloned().unwrap_or_default();
-        let counts = planner::Counts {
-            ev: events.iter().filter(|e| !e.done && (!is_t || mins(&e.end) > nm)).count(),
-            todo: open_on,
-            rep: if is_t { bv["mail"]["people_waiting"].as_u64().or_else(|| bv["mail"]["to_reply"].as_u64()).map(|n| n as usize).unwrap_or_else(|| replies.with(Vec::len)) } else { 0 },
-            pay: if is_t { matters_all.iter().filter(|x| x["k"] == "pay").count() } else { 0 },
-        };
-        let matters: Vec<Value> = matters_all.into_iter().filter(|x| !EVENT_KINDS.contains(&x["k"].as_str().unwrap_or(""))).take(7).collect();
-        let eve = evening();
+        let counts = b.with(|bv| {
+            let bv = bv.as_ref().unwrap_or(&Value::Null);
+            planner::Counts {
+                ev: events.with(|e| e.iter().filter(|e| !e.done && (!t || mins(&e.end) > nm)).count()),
+                todo: todos.with(|ts| ts.iter().filter(|x| !x.done && due_of(&x.due).is_some_and(|d| d.day == sl || (t && d.day < td))).count()),
+                rep: if t { bv["mail"]["people_waiting"].as_u64().or_else(|| bv["mail"]["to_reply"].as_u64()).map(|n| n as usize).unwrap_or_else(|| replies.with(Vec::len)) } else { 0 },
+                pay: if t { bv["matters"].as_array().map_or(0, |m| m.iter().filter(|x| x["k"] == "pay").count()) } else { 0 },
+            }
+        });
+        planner::greeting(&sl, &td, counts, filter, c)
+    };
+    let matters = move || {
+        tick.track();
+        if !is_t.get() {
+            return None;
+        }
+        let bv = b.get()?;
+        let matters: Vec<Value> = bv["matters"].as_array().cloned().unwrap_or_default().into_iter().filter(|x| !EVENT_KINDS.contains(&x["k"].as_str().unwrap_or(""))).take(7).collect();
         let by_model = bv["by_model"] == true;
-        let pending = bv["pending"] == true;
-        let text = bv["text"].as_str().unwrap_or("").to_string();
         let model_note = bv["model_note"].as_str().filter(|x| !x.is_empty()).unwrap_or("your model didn't answer").to_string();
-        let shape = if is_t { cards::shape_chips(&bv, c) } else { vec![] };
-        let day = bv["day"].as_str().unwrap_or(&td).to_string();
-        let side = is_t.then(|| cards::side_card(&bv, c));
+        Some(view! {
+            {(!matters.is_empty()).then(|| view! {
+                <div class="td-mth">{c.t(if evening() { "Tonight and tomorrow" } else { "What matters today" })}</div>
+                <ul class="td-mts">{matters.iter().enumerate().map(|(i, x)| {
+                    let k = x["k"].as_str().unwrap_or("").to_string();
+                    let next_in = (k == "next" && x["time"].is_string() && mins(x["time"].as_str().unwrap_or("")) > now_min()).then(|| format!(" · {} {} min", c.t("in"), mins(x["time"].as_str().unwrap_or("")) - now_min()));
+                    let who = x["who"].as_array().cloned().unwrap_or_default();
+                    view! {
+                        <li class=format!("mt-{k} rise") style=format!("--d:{}s", 0.2 + i as f64 * 0.07)>
+                            <span class="ic">{cards::matter_icon(&k)}</span>
+                            <span class="tx"><span>{x["text"].as_str().unwrap_or("").to_string()}</span><small>{x["detail"].as_str().unwrap_or("").to_string()}{next_in}</small>
+                                {(!who.is_empty()).then(|| view! { <span class="who">{who.iter().map(|p| {
+                                    let id = p["id"].as_str().unwrap_or("").to_string();
+                                    view! { <a title=p["subject"].as_str().unwrap_or("").to_string() on:click=move |_| navigate("mail", Where::Right, &[("msg", &id), ("folder", "INBOX")])>{format!("{} · {}d", p["from"].as_str().unwrap_or(""), p["days"])}</a> }
+                                }).collect_view()}</span> })}
+                            </span>
+                        </li>
+                    }
+                }).collect_view()}</ul>
+            })}
+            {(bv["pending"] != true).then(|| view! {
+                <div class=if by_model { "td-by" } else { "td-by off" }>
+                    <b>"●"</b>" "
+                    {if by_model { c.t("Headline by your model") } else { format!("{} {} · {}", c.t("No headline:"), c.t(&model_note), c.t("the list comes from your calendar, mail and the forecast")) }}
+                </div>
+            })}
+        })
+    };
+    let plan = move || {
+        tick.track();
+        let (td, sl) = (today.get(), sel.get());
+        let shape = if is_t.get() { b.with(|bv| bv.as_ref().map(|bv| cards::shape_chips(bv, c)).unwrap_or_default()) } else { vec![] };
+        planner::day_plan(sl, td, events.get(), all_day.get(), todos.get(), shape, filter.get(), c, acts, set_events, on_calendar)
+    };
+    let side = move || {
+        tick.track();
+        if !is_t.get() {
+            return None;
+        }
+        b.with(|bv| bv.as_ref().map(|bv| cards::side_card(bv, c)))
+    };
+    let main = move || {
         view! {
             <main class="td-main">
                 <planner::Strip start=start sel=sel.into() today=today.into() marks=marks c=c on_pick=pick
                     on_drop=Callback::new(move |(id, d): (String, String)| { if let Some(t) = todos.with_untracked(|ts| ts.iter().find(|x| x.id == id).cloned()) { acts.due(&t, &d, None) } })/>
                 <section class="td-card td-sum rise" style="--d:.15s">
-                    {planner::greeting(&sl, &td, counts, filter, c)}
-                    {is_t.then(|| view! {
-                        {(!text.is_empty()).then(|| view! { <div class="td-say"><hero::Typed text=text.clone()/></div> })}
-                        {(!matters.is_empty()).then(|| view! {
-                            <div class="td-mth">{c.t(if eve { "Tonight and tomorrow" } else { "What matters today" })}</div>
-                            <ul class="td-mts">{matters.iter().enumerate().map(|(i, x)| {
-                                let k = x["k"].as_str().unwrap_or("").to_string();
-                                let next_in = (k == "next" && x["time"].is_string() && mins(x["time"].as_str().unwrap_or("")) > now_min()).then(|| format!(" · {} {} min", c.t("in"), mins(x["time"].as_str().unwrap_or("")) - now_min()));
-                                let who = x["who"].as_array().cloned().unwrap_or_default();
-                                view! {
-                                    <li class=format!("mt-{k} rise") style=format!("--d:{}s", 0.2 + i as f64 * 0.07)>
-                                        <span class="ic">{cards::matter_icon(&k)}</span>
-                                        <span class="tx"><span>{x["text"].as_str().unwrap_or("").to_string()}</span><small>{x["detail"].as_str().unwrap_or("").to_string()}{next_in}</small>
-                                            {(!who.is_empty()).then(|| view! { <span class="who">{who.iter().map(|p| {
-                                                let id = p["id"].as_str().unwrap_or("").to_string();
-                                                view! { <a title=p["subject"].as_str().unwrap_or("").to_string() on:click=move |_| navigate("mail", Where::Right, &[("msg", &id), ("folder", "INBOX")])>{format!("{} · {}d", p["from"].as_str().unwrap_or(""), p["days"])}</a> }
-                                            }).collect_view()}</span> })}
-                                        </span>
-                                    </li>
-                                }
-                            }).collect_view()}</ul>
-                        })}
-                        {(!pending).then(|| view! {
-                            <div class=if by_model { "td-by" } else { "td-by off" }>
-                                <b>"●"</b>" "
-                                {if by_model { c.t("Headline by your model") } else { format!("{} {} · {}", c.t("No headline:"), c.t(&model_note), c.t("the list comes from your calendar, mail and the forecast")) }}
-                            </div>
-                        })}
-                    })}
-                    {(!is_t).then(|| view! { <button type="button" class="td-chip plain" style="margin-top:6px" on:click=move |_| pick.run(today.get_untracked())>{format!("← {}", c.t("Back to today"))}</button> })}
+                    {greet}
+                    {move || (is_t.get() && !text.get().is_empty()).then(|| view! { <div class="td-say"><hero::Typed text=text.get()/></div> })}
+                    {matters}
+                    {move || (!is_t.get()).then(|| view! { <button type="button" class="td-chip plain" style="margin-top:6px" on:click=move |_| pick.run(today.get_untracked())>{format!("← {}", c.t("Back to today"))}</button> })}
                     {move || (!err.get().is_empty()).then(|| view! { <div class="small err" style="margin-top:8px">{format!("{} ({})", c.t("Could not load the brief"), err.get())}</div> })}
                 </section>
-                {is_t.then(|| view! { <NotifyAsk/> })}
-                {is_t.then(|| view! { <cards::AssistCards a=assist.into() x=deliveries.into() day=day.clone() c=c/> })}
+                {move || is_t.get().then(|| view! { <NotifyAsk/> })}
+                {move || is_t.get().then(|| { let day = b.with_untracked(|b| b.as_ref().and_then(|b| b["day"].as_str().map(str::to_string))).unwrap_or_else(|| today.get_untracked()); view! { <cards::AssistCards a=assist.into() x=deliveries.into() day=day c=c/> } })}
                 <div class="td-cols">
-                    {planner::day_plan(sl.clone(), td.clone(), events, all_day, ts, shape, filter.get(), c, acts, set_events, on_calendar)}
+                    {plan}
                     <div class="td-side">
                         <planner::Inbox todos=todos replies=replies today=today.into() c=c acts=acts/>
                         {side}
@@ -379,10 +401,28 @@ fn Today() -> impl IntoView {
                 </div>
             </main>
         }
+    };
+    let body = move || {
+        if loaded.get() {
+            return main().into_any();
+        }
+        view! {
+            <main class="td-main"><section class="td-card"><div class="td-say">{move || { let e = err.get(); if e.is_empty() { c.t("Writing your brief…") } else { format!("{} ({e}).", c.t("Could not load the brief")) } }}</div></section></main>
+        }
         .into_any()
     };
+    // Once the page has risen, later redraws appear in place (no rise again).
+    let settled = RwSignal::new(false);
+    Effect::new(move |_| {
+        if loaded.get() {
+            gloo_timers::callback::Timeout::new(1800, move || {
+                let _ = settled.try_set(true);
+            })
+            .forget();
+        }
+    });
     view! {
-        <div class="td">
+        <div class=move || if settled.get() { "td settled" } else { "td" }>
             {hero}
             {body}
         </div>
