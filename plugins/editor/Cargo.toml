@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-hub = ["agentum-plugin/hub", "dep:async-trait", "dep:tokio"]
+hub = ["agentum-plugin/hub", "dep:async-trait", "dep:tokio", "dep:syntect"]
 web = ["agentum-plugin/web", "dep:leptos", "dep:agentum-ui", "dep:web-sys", "dep:wasm-bindgen", "dep:js-sys", "dep:gloo-timers"]
 
 [dependencies]
@@ -18,7 +18,9 @@ async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 leptos = { workspace = true, optional = true }
 agentum-ui = { workspace = true, optional = true }
-web-sys = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["HtmlDocument", "HtmlTextAreaElement", "KeyboardEvent", "Event"] }
 wasm-bindgen = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
 gloo-timers = { workspace = true, optional = true }
+# Highlighting on the hub (the web app carries no grammar).
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "html", "regex-fancy", "parsing"], optional = true }

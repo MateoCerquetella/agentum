@@ -1,0 +1,27 @@
+/* Terminal: tabs, and the screen as rows of spans (always dark, xterm's palette). */
+.tx { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.tx-tabs { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); flex: none; overflow-x: auto; }
+.tx-tab { display: inline-flex; align-items: center; gap: 4px; padding: 2px 3px 2px 8px; border-radius: var(--radius); font-size: 12px; color: var(--base); cursor: pointer; border: 1px solid transparent; }
+.tx-tab:hover { background: var(--hl); color: var(--hi); }
+.tx-tab.on { background: var(--widget); color: var(--hi); border-color: var(--border); }
+.tx-x { display: inline-grid; place-items: center; width: 16px; height: 16px; border: 0; border-radius: 4px; background: transparent; color: var(--subdue); padding: 0; }
+.tx-x:hover { background: var(--hl); color: var(--hi); }
+.tx-add { width: 24px; height: 24px; }
+.tx-term {
+  --t-fg: #d4d6dd; --t-bg: #16171d;
+  --t0: #2e3036; --t1: #e06c75; --t2: #98c379; --t3: #e5c07b; --t4: #61afef; --t5: #c678dd; --t6: #56b6c2; --t7: #c8ccd4;
+  --t8: #5c6370; --t9: #ef7f88; --t10: #b5e08f; --t11: #f0d08e; --t12: #7fc1f7; --t13: #d793ea; --t14: #6fd0dc; --t15: #ffffff;
+  position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--t-bg); color: var(--t-fg); cursor: text;
+}
+.tx-screen { position: absolute; inset: 0; padding: 4px 6px; font: 12.5px/17px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); white-space: pre; overflow: hidden; font-variant-ligatures: none; }
+.tx-probe { position: absolute; display: inline-block; visibility: hidden; font: 12.5px/17px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); white-space: pre; font-variant-ligatures: none; }
+.t-row { height: 17px; }
+.t-b { font-weight: 700; }
+.t-d { opacity: .6; }
+.t-i { font-style: italic; }
+.t-u { text-decoration: underline; }
+.t-cur { outline: 1px solid var(--t-fg); outline-offset: -1px; }
+.tx-term.focused .t-cur { background: var(--t-fg) !important; color: var(--t-bg) !important; outline: 0; }
+.tx-input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; pointer-events: none; }
+.tx-note { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius); background: #2a2c35; color: var(--t-fg); font-size: 12px; }
+.btn.tx-sm { height: 26px; padding: 0 10px; font-size: 12px; }

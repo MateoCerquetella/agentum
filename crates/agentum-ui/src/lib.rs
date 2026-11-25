@@ -1,6 +1,7 @@
 //! Agentum's web kit, shared by the app and every plugin's web part.
 //!
 //! - [`api`]: JSON calls to the hub (`/api/...`), plugin RPC.
+//! - [`diff`]: unified diffs, parsed and drawn (git, history).
 //! - [`ws`]: the page's one WebSocket (`/api/ws`): channel subscriptions as signals.
 //! - [`ui`]: toasts, confirm dialogs, modals.
 //! - [`nav`]: opening pages and reading/writing URL params from anywhere.
@@ -8,6 +9,7 @@
 //! - [`fmt`]: times and sizes for people.
 //! - [`store`]: localStorage.
 pub mod api;
+pub mod diff;
 pub mod fmt;
 pub mod icons;
 pub mod nav;

@@ -136,6 +136,9 @@ pub mod web {
         pub id: String,
         /// Its summary, live.
         pub summary: Signal<Option<ThreadSummary>>,
+        /// The side panel's open tab (a [`RailTab`] id; None: closed). Set it to show another
+        /// tab (Files opens a file in the Editor's).
+        pub rail: RwSignal<Option<String>>,
     }
 
     /// The composer a slot is shown in.
