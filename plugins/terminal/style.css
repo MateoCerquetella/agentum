@@ -14,7 +14,7 @@
   position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--t-bg); color: var(--t-fg); cursor: text;
 }
 .tx-screen { position: absolute; inset: 0; padding: 4px 6px; font: 12.5px/17px var(--mono); white-space: pre; overflow: hidden; font-variant-ligatures: none; }
-.tx-probe { position: absolute; visibility: hidden; font: 12.5px/17px var(--mono); white-space: pre; font-variant-ligatures: none; }
+.tx-probe { position: absolute; display: inline-block; visibility: hidden; font: 12.5px/17px var(--mono); white-space: pre; font-variant-ligatures: none; }
 .t-row { height: 17px; }
 .t-b { font-weight: 700; }
 .t-d { opacity: .6; }
