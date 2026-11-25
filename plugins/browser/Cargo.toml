@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-hub = ["agentum-plugin/hub", "dep:async-trait", "dep:tokio"]
+hub = ["agentum-plugin/hub", "dep:async-trait", "dep:tokio", "dep:reqwest"]
 web = ["agentum-plugin/web", "dep:leptos", "dep:agentum-ui", "dep:web-sys", "dep:wasm-bindgen", "dep:js-sys", "dep:gloo-timers"]
 
 [dependencies]
@@ -16,6 +16,8 @@ serde.workspace = true
 serde_json.workspace = true
 async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+# The hub's own client (same version and TLS as crates/agentum, so nothing new is built).
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"], optional = true }
 leptos = { workspace = true, optional = true }
 agentum-ui = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true }

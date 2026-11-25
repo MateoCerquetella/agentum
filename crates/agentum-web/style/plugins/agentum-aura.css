@@ -19,4 +19,5 @@ html[data-aura][data-theme] .sidebar { background: color-mix(in srgb, var(--side
 html[data-aura][data-theme] .pane { background: color-mix(in srgb, var(--bg) 84%, transparent); }
 html[data-aura][data-theme="studio"] body { background: var(--frame); }
 html[data-aura][data-theme="studio"] .pane { background: color-mix(in oklch, var(--background) 84%, transparent); }
-html[data-aura][data-theme="glass"] .pane, html[data-aura][data-theme="glass"] .sidebar { background: var(--bg); }
+html[data-aura][data-theme="glass"] .pane { background: var(--bg); }
+html[data-aura][data-theme="glass"] .sidebar { background: var(--sidebar); }
