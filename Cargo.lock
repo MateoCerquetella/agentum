@@ -573,6 +573,8 @@ dependencies = [
  "gloo-timers",
  "js-sys",
  "leptos",
+ "miniz_oxide",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "wasm-bindgen",
