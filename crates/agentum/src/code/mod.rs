@@ -464,10 +464,18 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
         return Err(bad("pick a project"));
     }
     let (mut cwd, mut branch) = (parent.as_ref().map(|p| p.cwd.clone()).unwrap_or(project.clone()), parent.as_ref().and_then(|p| p.branch.clone()));
+    let existing = b.cwd.as_ref().map(|c| c.trim().trim_end_matches('/')).filter(|c| !c.is_empty() && parent.is_none());
     if let Some(br) = b.worktree.as_ref().filter(|s| !s.trim().is_empty() && parent.is_none()) {
-        let r = machine_call(app, &machine, Req::Git(GitReq::WorktreeAdd { repo: project.clone(), branch: br.trim().to_string(), base: None })).await.map_err(bad)?;
+        let base = b.base.clone().filter(|s| !s.trim().is_empty());
+        let r = machine_call(app, &machine, Req::Git(GitReq::WorktreeAdd { repo: project.clone(), branch: br.trim().to_string(), base })).await.map_err(bad)?;
         cwd = r["path"].as_str().unwrap_or(&cwd).to_string();
         branch = r["branch"].as_str().map(str::to_string).or(Some(br.clone()));
+    } else if let Some(wt) = existing {
+        // One of this project's worktrees (agentd lists them; anything else is refused).
+        let sp = machine_call(app, &machine, Req::Git(GitReq::StartPoints { repo: project.clone() })).await.map_err(bad)?;
+        let w = sp["worktrees"].as_array().into_iter().flatten().find(|w| w["path"].as_str().map(|p| p.trim_end_matches('/')) == Some(wt)).ok_or_else(|| bad(format!("{wt} is not a worktree of {project}")))?;
+        cwd = wt.to_string();
+        branch = w["branch"].as_str().map(str::to_string);
     } else if branch.is_none() {
         branch = app.code.conn(&machine).and_then(|c| c.hello.read().unwrap().projects.iter().find(|p| p.path == project).and_then(|p| p.branch.clone()));
     }

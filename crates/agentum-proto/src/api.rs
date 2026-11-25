@@ -151,6 +151,12 @@ pub struct NewThread {
     /// Work in a new git worktree on this branch (None: in the project itself).
     #[serde(default)]
     pub worktree: Option<String>,
+    /// The new worktree's branch starts from this ref (None: the project's HEAD).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Work in this existing worktree of the project instead (a path on the machine).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     pub text: String,
     #[serde(default)]
     pub images: Vec<String>,

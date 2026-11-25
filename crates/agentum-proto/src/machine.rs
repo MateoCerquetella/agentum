@@ -223,6 +223,9 @@ pub enum GitReq {
     /// A new worktree for a thread: returns {path, branch}.
     WorktreeAdd { repo: String, branch: String, #[serde(default)] base: Option<String> },
     WorktreeRemove { path: String },
+    /// What a new thread can start from: `{default, current, dirty, branches: [..], remote: [..],
+    /// worktrees: [{path, branch, locked, prunable}]}` (the repo's own checkout left out).
+    StartPoints { repo: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

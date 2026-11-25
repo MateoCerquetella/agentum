@@ -212,3 +212,7 @@ a.dk-hit { display: block; }
 .msg-imgs { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
 .msg-imgs img { max-width: 220px; max-height: 160px; border-radius: 10px; border: 1px solid var(--border); cursor: zoom-in; object-fit: cover; }
 .msg-imgs img.big { max-width: 100%; max-height: 80vh; cursor: zoom-out; object-fit: contain; }
+
+/* New thread: the checkout's branch (not a menu) and the worktree chip's "Branch from: main". */
+.pk-static, .pk-static:hover { cursor: default; background: transparent; color: var(--subdue); }
+.pk-chip > b { font-weight: 600; color: var(--hi); overflow: hidden; text-overflow: ellipsis; }

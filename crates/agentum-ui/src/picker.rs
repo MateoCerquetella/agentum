@@ -17,6 +17,8 @@ pub struct PickItem {
     pub disabled: bool,
     /// The current choice (a check mark).
     pub on: bool,
+    /// Picking it leaves the menu open (a mode switch: "Existing worktree").
+    pub keep_open: bool,
 }
 
 fn contains(root: &NodeRef<leptos::html::Div>, target: Option<web_sys::EventTarget>) -> bool {
@@ -68,7 +70,9 @@ pub fn Picker(
     let pick = move |i: usize| {
         if let Some(it) = shown.get_untracked().get(i).filter(|it| !it.disabled) {
             on_pick.run(it.id.clone());
-            open.set(false);
+            if !it.keep_open {
+                open.set(false);
+            }
         }
     };
     let key = move |e: leptos::ev::KeyboardEvent| match e.key().as_str() {

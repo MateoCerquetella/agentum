@@ -320,7 +320,7 @@ fn check_git_paths(g: &agentum_proto::machine::GitReq, allowed: &fs::Allowed) ->
     use agentum_proto::machine::GitReq::*;
     let p = match g {
         Status { cwd } | Diff { cwd, .. } | Commit { cwd, .. } | Push { cwd } | Log { cwd, .. } | Show { cwd, .. } | Branches { cwd } | Pr { cwd } | PrMerge { cwd, .. } => cwd,
-        WorktreeAdd { repo, .. } => repo,
+        WorktreeAdd { repo, .. } | StartPoints { repo } => repo,
         WorktreeRemove { path } => path,
     };
     allowed.check(p).map(|_| ())

@@ -202,12 +202,12 @@ fn RefreshUsage(#[prop(optional)] size: Option<u32>) -> impl IntoView {
 pub fn UsageCard(agent: AgentKind, #[prop(optional)] on_close: Option<Callback<()>>) -> impl IntoView {
     let ov = overview();
     let u = Memo::new(move |_| ov.with(|o| o.as_ref().and_then(|o| agents_use(o).into_iter().find(|x| x.agent == agent))));
-    let from = move || u.with(|u| u.as_ref().map(|u| format!("Reported by {}, {}", u.machine, match ago_ms(u.at).as_str() { "now" => "just now".to_string(), a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"), a => a.to_string() })).unwrap_or_default());
+    let from = move || u.with(|u| u.as_ref().map(|u| format!("{}Reported by {}, {}", u.plan.as_ref().map(|p| format!("Plan: {p}. ")).unwrap_or_default(), u.machine, match ago_ms(u.at).as_str() { "now" => "just now".to_string(), a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"), a => a.to_string() })).unwrap_or_default());
     view! {
         <div class="ucard-card">
             <div class="ucard-head" title=from>
                 {agent_logo(agent, 18)}
-                <div class="grow" style="min-width:0"><b>{agent.label()}</b><div class="subdue truncate">{move || match u.with(|u| u.as_ref().and_then(|u| u.plan.clone())) { Some(p) => format!("{p} · subscription usage"), None => "Subscription usage".into() }}</div></div>
+                <div class="grow" style="min-width:0"><b>{agent.label()}</b><div class="subdue truncate">"Subscription usage"</div></div>
                 <RefreshUsage/>
                 {on_close.map(|c| view! { <button class="icon-btn" title="Close" aria-label="Close" on:click=move |_| c.run(())><Icon name="x" size=14/></button> })}
             </div>

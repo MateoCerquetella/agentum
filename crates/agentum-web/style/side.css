@@ -133,6 +133,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .ucard-win { display: flex; flex-direction: column; gap: 6px; padding: 10px 8px; border-bottom: 1px solid var(--border); }
 .ucard-win:nth-child(odd):not(:last-child) { border-right: 1px solid var(--border); }
 .ucard-win:last-child:nth-child(odd) { grid-column: 1 / -1; border-bottom: 0; }
+/* The last row has no line under it (BB). */
+.ucard-win:last-child, .ucard-win:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
 .ucard-row { display: flex; justify-content: space-between; gap: 8px; }
 .ucard-row b { font-variant-numeric: tabular-nums; }
 .ucard-bar { display: block; height: 5px; border-radius: 99px; background: var(--hl); overflow: hidden; }

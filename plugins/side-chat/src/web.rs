@@ -73,7 +73,7 @@ fn side_chats(cx: ThreadCx) -> AnyView {
             return;
         }
         busy.set(true);
-        let body = NewThread { machine: s.machine, project: s.project, agent: Some(s.agent), model: s.model, effort: s.effort, permission: s.permission, worktree: None, text: String::new(), images: vec![], parent: Some(s.id) };
+        let body = NewThread { machine: s.machine, project: s.project, agent: Some(s.agent), model: s.model, effort: s.effort, permission: s.permission, worktree: None, text: String::new(), images: vec![], parent: Some(s.id), ..Default::default() };
         spawn_local(async move {
             match api_post::<ThreadSummary>("/code/threads", &body).await {
                 Ok(t) => open(&t.id),
