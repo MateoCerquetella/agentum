@@ -97,8 +97,10 @@ fn resets(at: Option<i64>) -> String {
 fn money(c: f64) -> String {
     if c == 0.0 {
         "$0".into()
-    } else if c < 0.01 {
-        "<$0.01".into()
+    } else if c < 0.001 {
+        "<$0.001".into()
+    } else if c < 1.0 {
+        format!("${c:.3}")
     } else if c < 100.0 {
         format!("${c:.2}")
     } else {
@@ -130,6 +132,15 @@ fn UsagePage() -> impl IntoView {
                 Ok(v) => {
                     hours.set(rows(&v["hours"]));
                     total.set(rows(&v["total"]));
+                    // Windows the hub kept from before a restart, where the live ones have none.
+                    let kept: Vec<AgentLimits> = serde_json::from_value(v["limits"].clone()).unwrap_or_default();
+                    limits.update(|all| {
+                        for k in kept {
+                            if !all.iter().any(|x| x.agent == k.agent && x.machine == k.machine) {
+                                all.push(k);
+                            }
+                        }
+                    });
                 }
                 Err(e) => toast_bad(e.message),
             }
@@ -139,7 +150,12 @@ fn UsagePage() -> impl IntoView {
     spawn_local(async move {
         if let Ok(o) = api_get::<Overview>("/code/overview").await {
             names.set(o.machines.iter().map(|m| (m.id.clone(), m.name.clone())).collect());
-            limits.set(o.limits);
+            limits.update(|all| {
+                for l in o.limits.into_iter().rev() {
+                    all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
+                    all.insert(0, l);
+                }
+            });
         }
     });
     load();

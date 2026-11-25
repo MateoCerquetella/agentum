@@ -142,7 +142,8 @@ pub async fn sidebar(State(app): State<App>, Json(body): Json<Value>) -> R<Json<
 /// The look (Glance or Studio) and System / Light / Dark, for every device: a new browser starts
 /// in it. A device that picks again changes it everywhere.
 pub async fn look(State(app): State<App>, Json(body): Json<Value>) -> R<Json<Value>> {
-    let theme = body["theme"].as_str().filter(|t| ["glance", "studio"].contains(t)).ok_or_else(|| bad("theme is glance or studio"))?;
+    // Glance, Studio, or a look a plugin adds (the web app only adopts ids it knows).
+    let theme = body["theme"].as_str().filter(|t| (1..=32).contains(&t.len()) && t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')).ok_or_else(|| bad("theme is a look's id, like glance or studio"))?;
     let mode = body["mode"].as_str().filter(|m| ["system", "light", "dark"].contains(m)).ok_or_else(|| bad("mode is system, light or dark"))?;
     let mut st = app.db.kv_get("settings").await?.unwrap_or(json!({"env": {}, "ui": {}}));
     if !st["ui"].is_object() { st["ui"] = json!({}); }

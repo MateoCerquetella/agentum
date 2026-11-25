@@ -7,3 +7,4 @@
 .ctx-gauge.warn .ctx-num { color: var(--warm); }
 .ctx-gauge.bad .ctx-num { color: var(--negative); }
 .ctx-compact { height: 20px !important; padding: 0 8px !important; font-size: 11.5px !important; gap: 4px; }
+.ctx-gauge .ctx-bar { flex: none; width: 72px; min-width: 0; height: 4px; }

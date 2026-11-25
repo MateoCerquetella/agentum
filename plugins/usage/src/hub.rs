@@ -15,6 +15,7 @@ pub struct Plugin;
 pub static PLUGIN: Plugin = Plugin;
 
 const KEY: &str = "agg";
+const LIMITS: &str = "limits";
 const HOUR: i64 = 3_600_000;
 /// Hours kept (the page shows 14 days in the viewer's time zone).
 const KEEP_HOURS: i64 = 24 * 35;
@@ -109,6 +110,14 @@ impl HubPlugin for Plugin {
     }
 
     async fn on_event(&self, cx: &Ctx, t: &ThreadSummary, e: &Event) {
+        // The newest windows per agent and machine, kept so the page has them after a restart.
+        if let EventKind::RateLimits { limits } = &e.kind {
+            let _g = AGG.lock().await;
+            let mut all = cx.kv_get(LIMITS).await.and_then(|v| v.as_object().cloned()).unwrap_or_default();
+            all.insert(format!("{}\t{}", t.agent.id(), t.machine), json!({ "agent": t.agent, "machine": t.machine, "limits": limits, "at": e.ts }));
+            cx.kv_set(LIMITS, Value::Object(all)).await;
+            return;
+        }
         if !matches!(e.kind, EventKind::TurnDone { .. }) {
             return;
         }
@@ -121,7 +130,8 @@ impl HubPlugin for Plugin {
         }
     }
 
-    /// `summary` → `{hours: [{h, agent, machine, project, s}], total: [{agent, machine, project, s}]}`
+    /// `summary` → `{hours: [{h, agent, machine, project, s}], total: [{agent, machine, project, s}],
+    /// limits: [AgentLimits as last reported]}`
     /// (hours of the last 15 days; the page groups them into its own days).
     async fn rpc(&self, cx: &Ctx, method: &str, _input: Value) -> Result<Value, String> {
         if method != "summary" {
@@ -159,6 +169,7 @@ impl HubPlugin for Plugin {
                 json!({ "agent": agent, "machine": machine, "project": project, "s": s })
             })
             .collect();
-        Ok(json!({ "hours": hours, "total": total }))
+        let limits: Vec<Value> = cx.kv_get(LIMITS).await.and_then(|v| v.as_object().cloned()).unwrap_or_default().into_values().collect();
+        Ok(json!({ "hours": hours, "total": total, "limits": limits }))
     }
 }

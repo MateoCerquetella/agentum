@@ -14,6 +14,7 @@
 .gu-tl-i.tone-good > i { background: var(--positive); } .gu-tl-i.tone-warn > i { background: var(--money); } .gu-tl-i.tone-bad > i { background: var(--negative); }
 .gu-spark.tone-good { color: var(--positive); } .gu-spark.tone-bad { color: var(--negative); } .gu-spark.tone-warn { color: var(--money); }
 .gu-steps li small, .gu-tl-i .ti small { font-size: 11.5px; }
+.gu-root .gu-spark { max-width: 260px; }
 .gu-code { margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--hl); color: var(--hi); font: 12px/1.5 var(--mono, var(--font)); white-space: pre-wrap; overflow-x: auto; max-height: 360px; }
 .gu-img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
 /* Inputs */
@@ -51,6 +52,7 @@
 .gu-li.tone-good .gu-li-icon { color: var(--positive); } .gu-li.tone-bad .gu-li-icon { color: var(--negative); } .gu-li.tone-warn .gu-li-icon { color: var(--money); }
 /* Tabs */
 .gu-tabs { display: grid; gap: 8px; }
+.gu-tabs > [hidden] { display: none !important; }
 .gu-tabbar { display: flex; gap: 2px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .gu-tabbar button { border: 0; background: transparent; color: var(--base); padding: 5px 10px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 12.5px; }
 .gu-tabbar button[aria-selected="true"] { color: var(--hi); border-bottom-color: var(--primary); }
@@ -60,10 +62,10 @@
 .gu-details[open] > summary svg { transform: rotate(90deg); }
 /* Charts */
 .gu-chart { margin: 0; display: grid; gap: 6px; }
-.gu-chart svg { width: 100%; max-width: 620px; height: auto; overflow: visible; }
+.gu-chart svg { width: 100%; max-width: 540px; height: auto; overflow: visible; }
 .gu-chart svg.gu-pie { max-width: 180px; justify-self: center; }
 .gu-axis line { stroke: var(--border); stroke-width: 1; }
-.gu-axis text, .gu-pie-total { fill: var(--subdue); font-size: 9.5px; font-family: var(--font); }
+.gu-axis text, .gu-pie-total { fill: var(--subdue); font-size: 8.5px; font-family: var(--font); }
 .gu-pie-total { font-size: 15px; fill: var(--hi); }
 .gu-chart rect.c0, .gu-chart circle.c0:not(.gu-slice), .gu-area.c0 { fill: var(--gc0); } .gu-chart .gu-line.c0, .gu-slice.c0 { stroke: var(--gc0); }
 .gu-chart rect.c1, .gu-chart circle.c1:not(.gu-slice), .gu-area.c1 { fill: var(--gc1); } .gu-chart .gu-line.c1, .gu-slice.c1 { stroke: var(--gc1); }

@@ -39,7 +39,7 @@ impl HubPlugin for Plugin {
                     facts.push(format!("{}s", duration_ms / 1000));
                 }
                 if let Some(c) = cost_usd.filter(|c| *c > 0.0) {
-                    facts.push(format!("${c:.2}"));
+                    facts.push(if c < 0.1 { format!("${c:.3}") } else { format!("${c:.2}") });
                 }
                 let mut body: String = t.preview.chars().take(160).collect();
                 if !facts.is_empty() {

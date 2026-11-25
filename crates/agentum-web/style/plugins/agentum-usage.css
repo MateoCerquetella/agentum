@@ -13,7 +13,7 @@
 .usage-win.bad .usage-win-bar i { background: var(--negative); }
 .usage-win.bad .usage-win-pct { color: var(--negative); }
 .usage-win-pct { text-align: right; color: var(--hi); }
-.usage-win-reset { grid-column: 2 / 4; }
+.usage-win-reset { grid-column: 2 / 4; text-align: left; justify-self: start; }
 .usage-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
 .usage-metric { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--border); border-radius: calc(var(--radius) * 1.6); min-width: 0; }
 .usage-metric small { color: var(--subdue); font-size: 11px; }
