@@ -75,7 +75,7 @@ pub fn Folders() -> impl IntoView {
                             <Show when=move || { n.get() > 0 }><span class="count">{move || n.get()}</span></Show>
                         </button>
                         <Show when=is_open>
-                            {let id = id5.clone(); BOXES.iter().map(move |b| mailbox(id.clone(), *b, (b.0 == "inbox" && !b.1).then_some(n))).collect_view()}
+                            {let id = id5.clone(); BOXES.iter().map(move |b| mailbox(id.clone(), *b, (b.0 == "inbox").then_some(n))).collect_view()}
                         </Show>
                     }
                 }).collect_view())

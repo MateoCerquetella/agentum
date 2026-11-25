@@ -1,6 +1,9 @@
 # Agentum
 
-A self-hosted workspace for one person, all in Rust:
+A self-hosted workspace for one person, all in Rust (the web app is Leptos compiled to
+WebAssembly; no Node anywhere).
+
+![Mail in Agentum: the folders sit in the app's sidebar, the list and the open email beside them](docs/screenshots/mail.png)
 
 - **Personal**: mail, calendar, notes, a dashboard and a Secretary that runs on *your own* model,
   so your private life never reaches a cloud provider.
@@ -8,6 +11,14 @@ A self-hosted workspace for one person, all in Rust:
   and steer: questions and permissions, queued or steered messages, diffs, git, pull requests,
   files, an editor and terminals, side chats, search over everything that was said.
 - **Plugins**, in the style of BB's: each one a manifest, a hub part and a web part mounted in slots.
+
+| | |
+|---|---|
+| ![Coding: a thread with its tool calls and diff](docs/screenshots/coding.png) | ![Mail in the dark](docs/screenshots/mail-dark.png) |
+| ![Today: your day at a glance](docs/screenshots/today.png) | ![Calendar: the week](docs/screenshots/calendar.png) |
+| ![The dashboard](docs/screenshots/dashboard.png) | |
+
+The screenshots use made-up demo data; `scripts/demo.sh` runs the same demo (below).
 
 ```
 browser ──HTTP + one WebSocket──▶ agentum (hub: axum + SQLite, serves the Leptos/wasm web app)
@@ -27,6 +38,16 @@ cargo install wasm-bindgen-cli --version <the wasm-bindgen version in Cargo.lock
 # plus wasm-opt (binaryen), brotli, cargo-zigbuild and zig
 deploy/build.sh        # dist/agentum-<arch>, dist/agentd-<arch>
 ```
+
+## Try it on demo data
+
+```
+scripts/build-web.sh && cargo build -p agentum
+scripts/demo.sh 7141      # a hub on made-up mail, calendar, notes and coding threads
+```
+
+It starts on a fresh temp directory, reaches no mail server and prints the address
+(sign in as demo / demo). Stop it with `kill "$(cat /tmp/agentum-demo-7141/pid)"`.
 
 ## Run
 
@@ -67,7 +88,29 @@ not into a thread, a log or the hub's database. If git doesn't ignore `.env`, ag
 `.gitignore` and the tab says so. Agents are told to ask for a key in that tab instead of asking for
 its value in chat.
 
-The project grew out of an earlier personal dashboard (CERQ) and replaces the author's use of BB.
+## Thanks
+
+Agentum stands on other people's work, and borrows ideas from a few projects it is glad exist:
+
+- [Glance](https://github.com/glanceapp/glance): the dashboard this started as. Its look lives
+  on as the Glance theme, and the Dashboard's widgets follow its lead.
+- [Odysseus](https://github.com/odysseus-dev/odysseus): the self-hosted AI workspace the first
+  version (CERQ) was built on. Its chat, calendar and notes shaped the Personal side, and Agentum
+  still accepts its sign-in sessions.
+- [BB](https://getbb.app): how the Coding side moves around threads, the sidebar (Dockside), the
+  new-thread composer and plugins mounted in slots. See [docs/COMPARE-BB.md](docs/COMPARE-BB.md).
+- [Inbox Zero](https://github.com/elie222/inbox-zero): Reply Zero, the cold email blocker, bulk
+  unsubscribe and the rules in Mail follow its ideas.
+- [Steel](https://github.com/steel-dev/steel-browser): each project's browser (Surf).
+- [Speaches](https://github.com/speaches-ai/speaches) (Whisper and Kokoro) for voice, and
+  [Ollama](https://ollama.com) for the Secretary's local model.
+- [Leptos](https://leptos.dev), [axum](https://github.com/tokio-rs/axum),
+  [SQLite](https://sqlite.org) and [wasm-bindgen](https://github.com/rustwasm/wasm-bindgen);
+  icons drawn after [Lucide](https://lucide.dev); [Geist](https://vercel.com/font) and
+  [JetBrains Mono](https://www.jetbrains.com/lp/mono/); weather from
+  [Open-Meteo](https://open-meteo.com).
+
+The project grew out of that earlier personal dashboard (CERQ) and replaces the author's use of BB.
 
 ## License
 
