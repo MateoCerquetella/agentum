@@ -35,7 +35,7 @@ async fn transcribe(State(app): State<App>, headers: HeaderMap, body: Bytes) -> 
     let ext = if ct.contains("mp4") || ct.contains("m4a") || ct.contains("aac") { "m4a" } else if ct.contains("ogg") { "ogg" } else if ct.contains("wav") { "wav" } else { "webm" };
     let part = reqwest::multipart::Part::bytes(body.to_vec()).file_name(format!("speech.{ext}")).mime_str(&ct).map_err(|e| bad(e.to_string()))?;
     let mut form = reqwest::multipart::Form::new().part("file", part).text("model", app.setting("CERQ_VOICE_STT")).text("response_format", "json");
-    // Naming the language saves Whisper a detection pass (~1.3 s of 3 on Mars' CPU).
+    // Naming the language saves Whisper a detection pass (~1.3 s of 3 on a desktop CPU).
     match app.setting("CERQ_VOICE_LANG").as_str() { "Spanish" => form = form.text("language", "es"), "English" => form = form.text("language", "en"), _ => {} }
     let r = app.http.post(format!("{u}/audio/transcriptions")).multipart(form).timeout(Duration::from_secs(180)).send().await
         .map_err(|_| bad("The speech server didn't answer."))?;

@@ -75,7 +75,7 @@ Both binaries read a dotenv file when they start (`KEY=value` lines; `export`, `
 # ~/.config/agentum/agentd.env
 AGENTD_HUB=wss://hub.example.lan/agentd
 AGENTD_TOKEN=agm_…
-AGENTD_NAME=jupiter
+AGENTD_NAME=laptop
 AGENTD_PROJECTS=~/src/app:~/src/site
 ```
 
