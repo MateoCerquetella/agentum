@@ -3,10 +3,12 @@
 //! Coding is Dockside (dockside.rs).
 use crate::code::store::overview;
 use crate::pages::{self, theme::ModeSwitch, Side};
-use agentum_proto::Attention;
+use agentum_proto::api::Overview;
+use agentum_proto::{AgentKind, Attention, RateLimit};
 use agentum_ui::nav::Where;
 use agentum_ui::prelude::*;
 use std::collections::BTreeMap;
+use wasm_bindgen::JsCast;
 
 #[component]
 pub fn SideSwitch(side: RwSignal<Side>, collapsed: RwSignal<bool>, on_set: Callback<Side>) -> impl IntoView {
@@ -99,46 +101,185 @@ pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collaps
     }
 }
 
-/// Settings, the look, each agent's limits, sign out.
+/// One agent's subscription limits: the newest report among its machines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentUse {
+    pub agent: AgentKind,
+    pub machine: String,
+    pub at: i64,
+    pub windows: Vec<RateLimit>,
+}
+/// Every agent that reported limits, the one used last first.
+pub fn agents_use(o: &Overview) -> Vec<AgentUse> {
+    let mut by: Vec<AgentUse> = vec![];
+    for l in o.limits.iter().filter(|l| !l.limits.is_empty()) {
+        let u = AgentUse { agent: l.agent, machine: l.machine.clone(), at: l.at, windows: l.limits.clone() };
+        match by.iter_mut().find(|x| x.agent == l.agent) {
+            Some(x) if l.at > x.at => *x = u,
+            Some(_) => {}
+            None => by.push(u),
+        }
+    }
+    by.sort_by(|a, b| b.at.cmp(&a.at));
+    by
+}
+/// Percent used now: a window whose reset has passed starts again from zero.
+fn used(w: &RateLimit) -> f64 {
+    if w.resets_at.is_some_and(|r| r <= now_ms()) { 0.0 } else { w.used_percent }
+}
+fn window_name(w: &str) -> String {
+    match w {
+        "5h" => "5-hour".into(),
+        "weekly" => "Weekly".into(),
+        "opus-weekly" => "Weekly · Opus".into(),
+        "sonnet-weekly" => "Weekly · Sonnet".into(),
+        x => x.replace('-', " "),
+    }
+}
+/// "Resets Wed 15:00" (or "Reset …" once it has).
+fn resets(at: Option<i64>) -> String {
+    let Some(at) = at else { return String::new() };
+    let o = js_sys::Object::new();
+    for (k, v) in [("weekday", "short"), ("hour", "2-digit"), ("minute", "2-digit")] {
+        let _ = js_sys::Reflect::set(&o, &k.into(), &v.into());
+    }
+    let when = String::from(js_sys::Date::new(&(at as f64).into()).to_locale_string("en-GB", &o));
+    format!("{} {when}", if at <= now_ms() { "Reset" } else { "Resets" })
+}
+fn tone(pct: f64) -> &'static str {
+    if pct >= 90.0 { "var(--negative)" } else if pct >= 70.0 { "var(--warm)" } else { "var(--subdue)" }
+}
+/// The agent's logo (simple-icons, tinted by the theme).
+pub fn agent_logo(a: AgentKind, size: u32) -> impl IntoView {
+    let name = match a {
+        AgentKind::ClaudeCode => "claude",
+        AgentKind::Codex => "openai",
+        AgentKind::Opencode => "opencode",
+    };
+    view! { <span class="pick-logo si" style=format!("width:{size}px;height:{size}px;-webkit-mask-image:url(/api/icons/si/{name});mask-image:url(/api/icons/si/{name})") aria-hidden="true"/> }
+}
+
+/// BB's usage card: one agent's limits, each window with its bar and when it resets.
+#[component]
+pub fn UsageCard(agent: AgentKind, #[prop(optional)] on_close: Option<Callback<()>>) -> impl IntoView {
+    let ov = overview();
+    let busy = RwSignal::new(false);
+    let u = Memo::new(move |_| ov.with(|o| o.as_ref().and_then(|o| agents_use(o).into_iter().find(|x| x.agent == agent))));
+    let refresh = move |_| {
+        busy.set(true);
+        spawn_local(async move {
+            crate::code::store::refresh().await;
+            busy.try_set(false);
+        })
+    };
+    view! {
+        <div class="ucard-card">
+            <div class="ucard-head">
+                {agent_logo(agent, 16)}
+                <div class="grow"><b>{agent.label()}</b><div class="subdue">"Subscription usage"</div></div>
+                <button class="icon-btn" title="Refresh" aria-label="Refresh" disabled=move || busy.get() on:click=refresh><Icon name="refresh" size=14 class=Signal::derive(move || if busy.get() { "spin".to_string() } else { String::new() })/></button>
+                {on_close.map(|c| view! { <button class="icon-btn" title="Close" aria-label="Close" on:click=move |_| c.run(())><Icon name="x" size=14/></button> })}
+            </div>
+            {move || u.get().map(|u| view! {
+                <p class="subdue ucard-msg">{format!("From a thread on {}, {}", u.machine, match ago_ms(u.at).as_str() { "now" => "just now".to_string(), a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"), a => a.to_string() })}</p>
+                <div class="ucard-grid">
+                    {u.windows.iter().map(|w| {
+                        let pct = used(w).round();
+                        view! {
+                            <div class="ucard-win">
+                                <div class="ucard-row"><span>{window_name(&w.window)}</span><b style={ if pct >= 70.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</b></div>
+                                <span class="ucard-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
+                                <span class="subdue">{resets(w.resets_at)}</span>
+                            </div>
+                        }
+                    }).collect_view()}
+                </div>
+            })}
+        </div>
+    }
+}
+
+/// The Dashboard's "Agent usage" widget: every agent's card.
+#[component]
+pub fn UsageW() -> impl IntoView {
+    let ov = overview();
+    let agents = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| agents_use(o).into_iter().map(|u| u.agent).collect::<Vec<_>>())));
+    move || match agents.get() {
+        None => view! { <div class="dw-empty">"Loading…"</div> }.into_any(),
+        Some(a) if a.is_empty() => view! { <div class="dw-empty">"No agent has reported its limits yet: they come with a thread's first turn."</div> }.into_any(),
+        Some(a) => view! { <div class="dw-usage">{a.into_iter().map(|agent| view! { <UsageCard agent=agent/> }).collect_view()}</div> }.into_any(),
+    }
+}
+
+/// Settings, the look, each agent's limits (a meter opens its card), sign out.
 #[component]
 pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl IntoView {
     let ov = overview();
+    // As BB's footer: the agent used last first, then the next one; each meter its fullest window.
     let meters = move || {
         ov.with(|o| {
             o.as_ref()
                 .map(|o| {
-                    // One meter per agent: its fullest window on any machine.
-                    let mut by: Vec<(&'static str, String, f64)> = vec![];
-                    for l in &o.limits {
-                        for w in &l.limits {
-                            match by.iter_mut().find(|x| x.0 == l.agent.label()) {
-                                Some(x) if w.used_percent > x.2 => *x = (l.agent.label(), w.window.clone(), w.used_percent),
-                                Some(_) => {}
-                                None => by.push((l.agent.label(), w.window.clone(), w.used_percent)),
-                            }
-                        }
-                    }
-                    by.truncate(2);
-                    by
+                    agents_use(o)
+                        .into_iter()
+                        .take(2)
+                        .filter_map(|u| u.windows.iter().map(|w| (window_name(&w.window), used(w))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(w, p)| (u.agent, w, p)))
+                        .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         })
     };
-    let tone = |pct: f64| if pct >= 90.0 { "var(--negative)" } else if pct >= 70.0 { "var(--warm)" } else { "var(--subdue)" };
+    // The card: which agent, and where (left, bottom) above its meter.
+    let shown = RwSignal::new(None::<(AgentKind, f64, f64)>);
+    let card = NodeRef::<leptos::html::Div>::new();
+    on_window(leptos::ev::mousedown, move |e: web_sys::MouseEvent| {
+        if shown.get_untracked().is_none() {
+            return;
+        }
+        let inside = |el: Option<web_sys::Element>| el.is_some_and(|el| e.target().and_then(|t| t.dyn_into::<web_sys::Node>().ok()).is_some_and(|n| el.contains(Some(&n))));
+        let on_meter = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).and_then(|t| t.closest(".dock-meter").ok().flatten()).is_some();
+        if !inside(card.get_untracked().map(Into::into)) && !on_meter {
+            shown.set(None);
+        }
+    });
+    on_window(leptos::ev::keydown, move |e: web_sys::KeyboardEvent| {
+        if e.key() == "Escape" && shown.get_untracked().is_some() {
+            shown.set(None);
+        }
+    });
+    let toggle = move |agent: AgentKind, e: web_sys::MouseEvent| {
+        if shown.get_untracked().is_some_and(|s| s.0 == agent) {
+            shown.set(None);
+            return;
+        }
+        let Some(el) = e.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        let r = el.get_bounding_client_rect();
+        let w = web_sys::window().unwrap();
+        let (vw, vh) = (w.inner_width().ok().and_then(|x| x.as_f64()).unwrap_or(1200.0), w.inner_height().ok().and_then(|x| x.as_f64()).unwrap_or(800.0));
+        shown.set(Some((agent, r.left().min(vw - 348.0).max(8.0), vh - r.top() + 6.0)));
+    };
     view! {
         <div class=move || if collapsed.get() { "dock-foot collapsed" } else { "dock-foot" }>
             <button class=move || if settings_on.get() { "icon-btn on" } else { "icon-btn" } title="Settings" on:click=move |_| navigate("settings", Where::Replace, &[])><Icon name="settings" size=16/></button>
             <ModeSwitch compact=true/>
             <Show when=move || !collapsed.get()><span class="grow"/></Show>
             <Show when=move || !collapsed.get()>
-                {move || meters().into_iter().map(|(name, win, pct)| view! {
-                    <button class="dock-meter" title=format!("{name}: {win} {pct:.0}% used") on:click=move |_| navigate("p/usage", Where::Replace, &[])>
-                        <Icon name="bot" size=12/>
+                {move || meters().into_iter().map(|(agent, win, pct)| view! {
+                    <button class=move || if shown.get().is_some_and(|s| s.0 == agent) { "dock-meter on" } else { "dock-meter" } title=format!("{}: {win} {pct:.0}% used", agent.label())
+                        aria-expanded=move || shown.get().is_some_and(|s| s.0 == agent).to_string() on:click=move |e| toggle(agent, e)>
+                        {agent_logo(agent, 12)}
                         <span class="dock-meter-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
-                        <span>{format!("{pct:.0}%")}</span>
+                        <span style={ if pct >= 70.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</span>
                     </button>
                 }).collect_view()}
             </Show>
+            {move || shown.get().map(|(agent, left, bottom)| view! {
+                <leptos::portal::Portal>
+                    <div class="pick-pop ucard-pop" node_ref=card role="dialog" aria-label="Usage" style=format!("left:{left}px;bottom:{bottom}px;width:340px")>
+                        <UsageCard agent=agent on_close=Callback::new(move |_| shown.set(None))/>
+                    </div>
+                </leptos::portal::Portal>
+            })}
             <button class="icon-btn" title="Sign out" on:click=move |_| spawn_local(async {
                 let _ = api_post::<Value>("/auth/logout", &json!({})).await;
                 let _ = web_sys::window().unwrap().location().reload();

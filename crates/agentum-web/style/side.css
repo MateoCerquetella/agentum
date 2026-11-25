@@ -139,3 +139,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .ucard-bar i { display: block; height: 100%; border-radius: inherit; }
 html[data-theme="studio"] :is(.ucard-head, .ucard-win) { border-color: var(--hairline); }
 html[data-theme="studio"] .ucard-bar { background: var(--muted); }
+.ucard-pop { max-width: min(340px, calc(100vw - 16px)); padding: 6px 4px; }
+.ucard-card .pick-logo { color: var(--hi); }
+.dock-meter .pick-logo { color: currentColor; }
