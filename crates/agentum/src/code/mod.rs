@@ -335,6 +335,10 @@ fn offline(m: &str) -> AppError {
 /// Call agentd on a machine (for the hub, plugins and the generic /api/code/call).
 pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, String> {
     let c = app.code.conn(machine).ok_or_else(|| format!("{machine} is offline"))?;
+    // An agentd that doesn't know a request can't answer it, and would log the frame: a secret's value.
+    if matches!(req, Req::Secrets(_)) && !c.hello.read().unwrap().features.iter().any(|f| f == "secrets") {
+        return Err(format!("agentd on {machine} is too old for secrets: update it"));
+    }
     let wait = match &req {
         Req::Git(GitReq::Push { .. }) | Req::Git(GitReq::PrMerge { .. }) | Req::Git(GitReq::WorktreeAdd { .. }) => Duration::from_secs(120),
         Req::Start { .. } | Req::Models { .. } => Duration::from_secs(60),
@@ -470,7 +474,8 @@ async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Opt
         let tail: String = ctx.chars().rev().take(12_000).collect::<Vec<_>>().into_iter().rev().collect();
         input.text = format!("You are a side chat about another coding thread in this same directory. Answer questions about it; don't change files unless asked. Its conversation so far:\n{tail}\n\n---\n\n{}", input.text);
     }
-    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone() };
+    let instructions = crate::plugins::instructions(app, s).await;
+    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions };
     let req = Req::Start { thread: s.id.clone(), spec, resume, input: Some(input), last_seq: s.last_seq };
     match machine_call(app, &s.machine, req).await {
         Ok(_) => {

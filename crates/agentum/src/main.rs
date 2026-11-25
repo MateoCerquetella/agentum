@@ -29,9 +29,33 @@ use state::{App, Config};
 use std::{convert::Infallible, sync::Arc};
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Before the runtime (and any thread): the env file's variables, under those already set.
+    let env_file = env_file();
+    // SAFETY: no other thread exists yet.
+    let env = unsafe { agentum_proto::dotenv::load(&env_file) };
+    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run(env_file, env))
+}
+
+/// `$AGENTUM_ENV_FILE`, else `/etc/agentum.env` if it exists, else `<data dir>/.env`.
+fn env_file() -> std::path::PathBuf {
+    use std::path::{Path, PathBuf};
+    match std::env::var_os("AGENTUM_ENV_FILE") {
+        Some(p) => PathBuf::from(p),
+        None if Path::new("/etc/agentum.env").exists() => PathBuf::from("/etc/agentum.env"),
+        None => Path::new(&Config::from_env().data_dir).join(".env"),
+    }
+}
+
+async fn run(env_file: std::path::PathBuf, env: std::io::Result<Vec<String>>) -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
+    match env {
+        Ok(keys) if !keys.is_empty() => tracing::info!("{}: {}", env_file.display(), keys.join(" ")),
+        Ok(_) => {}
+        // deploy/agentum.service has systemd read /etc/agentum.env (as root) already.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => tracing::info!("{}: not readable here ({e})", env_file.display()),
+        Err(e) => tracing::warn!("{}: {e}", env_file.display()),
+    }
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cfg = Config::from_env();
     std::fs::create_dir_all(&cfg.data_dir)?;

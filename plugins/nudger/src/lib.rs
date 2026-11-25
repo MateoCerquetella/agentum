@@ -7,8 +7,9 @@ pub static MANIFEST: Manifest = Manifest {
     description: "Keeps a thread going: sends “continue” when it stops early.",
     icon: "refresh",
     group: Group::Thread,
-    default_on: false,
+    default_on: true,
     settings: &[
+        SettingDef { key: "auto", label: "On for every thread", help: "Nudge every thread unless you turn it off there (as in BB). Off: only threads you turn it on in.", kind: SettingKind::Bool, default: "true" },
         SettingDef { key: "text", label: "Message", help: "What it sends to keep a thread going.", kind: SettingKind::Text, default: "\"Continue.\"" },
         SettingDef {
             key: "max",

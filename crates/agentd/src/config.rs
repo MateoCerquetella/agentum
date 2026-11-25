@@ -1,4 +1,4 @@
-//! `~/.config/agentum/agentd.toml` and the data directory.
+//! `~/.config/agentum/agentd.toml` (or `AGENTD_*` variables, which override it) and the data directory.
 use crate::util::{expand, home};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -7,10 +7,13 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Config {
     /// The hub's agentd endpoint, e.g. `wss://hub.example.lan/agentd`.
+    #[serde(default)]
     pub hub: String,
     /// This machine's token (sent as `Authorization: Bearer <token>`).
+    #[serde(default)]
     pub token: String,
     /// The machine's name.
+    #[serde(default)]
     pub name: String,
     /// A PEM file of a private CA to trust for `wss://` (besides the public roots).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,12 +60,54 @@ impl Config {
         }
     }
 
+    /// The file, then the `AGENTD_*` variables over it. Without a file, the variables alone
+    /// (`AGENTD_HUB` at least).
     pub fn load() -> anyhow::Result<Config> {
         let p = Self::path();
-        let text = std::fs::read_to_string(&p).with_context(|| format!("reading {} (run `agentd install` first)", p.display()))?;
-        let c: Config = toml::from_str(&text).with_context(|| format!("parsing {}", p.display()))?;
-        anyhow::ensure!(!c.hub.is_empty(), "{}: `hub` is empty", p.display());
+        let mut c: Config = match std::fs::read_to_string(&p) {
+            Ok(text) => toml::from_str(&text).with_context(|| format!("parsing {}", p.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && std::env::var_os("AGENTD_HUB").is_some() => Config { idle_minutes: default_idle(), ..Default::default() },
+            Err(e) => return Err(e).with_context(|| format!("reading {} (run `agentd install` first)", p.display())),
+        };
+        c.apply_env(|k| std::env::var(k).ok());
+        anyhow::ensure!(!c.hub.is_empty(), "{}: `hub` is empty (and AGENTD_HUB isn't set)", p.display());
         Ok(c)
+    }
+
+    /// `AGENTD_HUB`, `AGENTD_TOKEN`, `AGENTD_NAME`, `AGENTD_CA`, `AGENTD_HUB_IP`, `AGENTD_ROOTS` and
+    /// `AGENTD_PROJECTS` (lists separated by `:` or `,`) override the file; a variable that is set
+    /// wins even when empty (`AGENTD_ROOTS=` scans nothing).
+    pub fn apply_env(&mut self, get: impl Fn(&str) -> Option<String>) {
+        let list = |v: String| v.split([':', ',']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>();
+        if let Some(v) = get("AGENTD_HUB") {
+            self.hub = v;
+        }
+        if let Some(v) = get("AGENTD_TOKEN") {
+            self.token = v;
+        }
+        if let Some(v) = get("AGENTD_NAME") {
+            self.name = v;
+        }
+        if let Some(v) = get("AGENTD_CA") {
+            self.ca = (!v.is_empty()).then_some(v);
+        }
+        if let Some(v) = get("AGENTD_HUB_IP") {
+            self.hub_ip = (!v.is_empty()).then_some(v);
+        }
+        if let Some(v) = get("AGENTD_ROOTS") {
+            self.roots = Some(list(v));
+        }
+        if let Some(v) = get("AGENTD_PROJECTS") {
+            self.projects = list(v);
+        }
+    }
+
+    /// `$AGENTD_ENV_FILE`, else `~/.config/agentum/agentd.env`.
+    pub fn env_file() -> PathBuf {
+        match std::env::var_os("AGENTD_ENV_FILE") {
+            Some(p) => PathBuf::from(p),
+            None => home().join(".config/agentum/agentd.env"),
+        }
     }
 
     pub fn load_or_default() -> Config {
@@ -127,5 +172,21 @@ mod tests {
         assert!(c.projects.is_empty());
         let back = toml::to_string_pretty(&c).unwrap();
         assert!(!back.contains("idle_minutes"));
+    }
+
+    #[test]
+    fn env_overrides_the_file() {
+        let mut c: Config = toml::from_str("hub = \"ws://h/agentd\"\ntoken = \"t\"\nname = \"n\"\nca = \"/ca.pem\"\nprojects = [\"/a\"]\n").unwrap();
+        let env = [("AGENTD_TOKEN", "t2"), ("AGENTD_ROOTS", ""), ("AGENTD_PROJECTS", "/x:/y, /z"), ("AGENTD_CA", ""), ("AGENTD_HUB_IP", "10.0.0.2")];
+        c.apply_env(|k| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()));
+        assert_eq!((c.hub.as_str(), c.token.as_str(), c.name.as_str()), ("ws://h/agentd", "t2", "n"));
+        assert_eq!(c.roots, Some(vec![]));
+        assert_eq!(c.projects, vec!["/x", "/y", "/z"]);
+        assert_eq!(c.ca, None);
+        assert_eq!(c.hub_ip.as_deref(), Some("10.0.0.2"));
+        // The file may leave the connection to the variables.
+        let mut c: Config = toml::from_str("data = \"/d\"\n").unwrap();
+        c.apply_env(|k| (k == "AGENTD_HUB").then(|| "ws://x/agentd".to_string()));
+        assert_eq!(c.hub, "ws://x/agentd");
     }
 }
