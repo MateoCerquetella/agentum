@@ -88,7 +88,8 @@ async fn run(env_file: std::path::PathBuf, env: std::io::Result<Vec<String>>) ->
             let wait = |s| tokio::time::sleep(std::time::Duration::from_secs(s));
             wait(15).await; mail::start(a.clone());
             wait(30).await; calendar::start(a.clone());
-            wait(30).await; today::start(a);
+            wait(30).await; today::start(a.clone());
+            wait(30).await; chat::start_prune(a);
         });
     }
 
