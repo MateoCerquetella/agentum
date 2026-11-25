@@ -345,11 +345,10 @@ pub fn Timeline(
                         }.into_any(),
                         Item::Error { text, full, .. } => match full {
                             Some((window, resets)) => {
-                                let agent = summary.with_untracked(|s| s.as_ref().map(|s| s.agent.label()).unwrap_or("The agent"));
                                 let when = resets.map(|r| format!(" It resets {}.", when_label(r))).unwrap_or_default();
                                 view! {
                                     <div class="limit-card">
-                                        <b>{format!("{agent}'s {window} limit is used up.")}</b>{when}
+                                        <b>{move || format!("{}'s {window} limit is used up.", summary.with(|s| s.as_ref().map(|s| s.agent.label()).unwrap_or("The agent")))}</b>{when}
                                         <div class="small subdue">"Switch to another agent in the model chip below, or send again after the reset. ("{text}")"</div>
                                     </div>
                                 }.into_any()
