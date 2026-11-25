@@ -26,7 +26,7 @@ const TABS: &[(&str, &str, &str)] = &[
     ("voice", "Voice", "Talk to the Secretary and hear its replies, through your speech server (Whisper writes out what you say, Kokoro reads replies aloud)."),
     ("look", "Appearance", "How Agentum looks on this device. Each device keeps its own; a new one starts with your last pick."),
     ("sidebar", "Sidebar", "The app's name, the order of your pages and Home Assistant."),
-    ("security", "Security", "Your password and passkeys (Touch ID / Face ID)."),
+    ("security", "Security", "Your password, passkeys (Touch ID / Face ID) and signing out."),
     ("machines", "Machines", "The computers your coding agents run on. Each runs agentd, which connects to this hub."),
     ("plugins", "Plugins", "Turn each plugin on or off, and set it up."),
 ];
