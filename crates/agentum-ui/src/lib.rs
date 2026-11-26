@@ -13,6 +13,7 @@ pub mod dnd;
 pub mod diff;
 pub mod fmt;
 pub mod icons;
+pub mod marks;
 pub mod nav;
 pub mod picker;
 pub mod store;

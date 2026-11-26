@@ -4,7 +4,8 @@
 //! it wakes early if it works or asks) and **settle** (archive; shown for a day). Side chats sit
 //! under their thread. Drag a card to a half to open it there; ⌘-click opens it on the right.
 use crate::code::store::{self, overview};
-use crate::code::{agent_icon, patch_thread, tomorrow_9};
+use crate::code::{patch_thread, tomorrow_9};
+use agentum_ui::marks::AgentMark;
 use agentum_proto::api::{PatchThread, ThreadSummary};
 use agentum_proto::{Attention, ThreadState};
 use agentum_ui::nav::Where;
@@ -278,7 +279,7 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
     let kids_open = RwSignal::new(true);
     let n_kids = kids.len();
     let mark = mark_of(&std::iter::once(&t).chain(kids.iter()).collect::<Vec<_>>(), agentum_ui::fmt::now_ms());
-    let agent = agent_icon(t.agent);
+    let agent = t.agent;
     view! {
         <li class="dk-li">
             <div class=move || format!("dk-card{}{}{}", if is_on.get() { " on" } else { "" }, if t.unread { " unread" } else { "" }, if mark.receded() { " receded" } else { "" })
@@ -314,7 +315,7 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                                 <span>{n_kids}</span>
                             </button>
                         })}
-                        <span class="dk-agent"><Icon name=agent size=13/></span>
+                        <span class=format!("dk-agent um-{}", agent.id())><AgentMark agent=agent size=13/></span>
                         <StatusMark mark=mark/>
                     </div>
                 </div>
@@ -352,7 +353,7 @@ fn Slim(t: ThreadSummary, on: Signal<Option<String>>, on_r: Signal<Option<String
             on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))>
             <a class="dk-hit" href=format!("/code?thread={}", id_c) data-thread=id_c.clone() draggable="false"
                 on:click=move |e: leptos::ev::MouseEvent| row_click(e, &id_c)/>
-            <span class="dk-agent"><Icon name=agent_icon(t.agent) size=13/></span>
+            <span class=format!("dk-agent um-{}", t.agent.id())><AgentMark agent=t.agent size=13/></span>
             <span class="dk-title">{if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() }}</span>
             <span class="dk-status">{when}</span>
             <StatusMark mark=mark_of(&[&t], agentum_ui::fmt::now_ms()) dot=true/>

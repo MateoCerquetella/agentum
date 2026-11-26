@@ -4,7 +4,6 @@ use crate::card::{state_line, Card};
 use agentum_plugin::web::WebPlugin;
 use agentum_plugin::Manifest;
 use agentum_proto::api::ThreadSummary;
-use agentum_proto::AgentKind;
 use agentum_ui::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -15,15 +14,6 @@ pub static PLUGIN: Plugin = Plugin;
 thread_local! {
     /// thread → (fetched at, its last_seq then, the card).
     static CACHE: RefCell<HashMap<String, (i64, u64, Card)>> = RefCell::new(HashMap::new());
-}
-
-fn agent_icon(a: AgentKind) -> &'static str {
-    match a {
-        AgentKind::ClaudeCode => "sparkle",
-        AgentKind::Codex => "terminal",
-        AgentKind::Opencode => "bot",
-        AgentKind::Cursor => "cube",
-    }
 }
 
 fn project_name(path: &str) -> String {
@@ -75,7 +65,7 @@ impl WebPlugin for Plugin {
                     {t.asking.clone().map(|a| view! { <div class="hc-ask"><Icon name="alert" size=12/><span>{a}</span></div> })}
                     <div class="hover-facts">
                         <span><Icon name="folder" size=12/>{place.join(" · ")}</span>
-                        <span><Icon name=agent_icon(t.agent) size=12/>{who.join(" · ")}</span>
+                        <span><agentum_ui::marks::AgentMark agent=t.agent size=12/>{who.join(" · ")}</span>
                         {(cost.is_some() || ctx.is_some()).then(|| view! {
                             <span class="hc-meter">
                                 {cost.clone().map(|c| view! { <Icon name="money" size=12/><span>{c}</span> })}
