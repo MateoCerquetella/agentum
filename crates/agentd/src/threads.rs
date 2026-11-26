@@ -548,6 +548,24 @@ impl Actor {
         }
     }
 
+    /// The agent started a turn on its own (Claude Code wakes when a background task it launched
+    /// finishes): its activity arrives while we think the thread
+    /// is idle. Open a turn for it, so the thread shows as working and its end is kept. Only from
+    /// Idle: stray events after a stop (Interrupted) or a failure must not look like work.
+    fn agent_turn(&mut self, kind: &EventKind) {
+        let activity = matches!(
+            kind,
+            EventKind::Delta { .. } | EventKind::Message { .. } | EventKind::ThinkingDelta { .. } | EventKind::Thinking { .. } | EventKind::Tool { .. } | EventKind::ToolOutput { .. } | EventKind::ToolDone { .. } | EventKind::Plan { .. } | EventKind::Ask { .. }
+        );
+        // Claude Code only: it is the agent that wakes itself, and its driver ends every turn with
+        // the result, so nothing of a finished turn can arrive after it and open a turn by mistake.
+        if activity && self.row.agent == agentum_proto::AgentKind::ClaudeCode && self.row.state == ThreadState::Idle && self.session.is_some() {
+            self.row.turn += 1;
+            self.emit(EventKind::TurnStarted { turn: self.row.turn });
+            self.set_state(ThreadState::Running);
+        }
+    }
+
     /// End the turn ourselves (the agent can't say so any more).
     async fn force_end(&mut self, stop: StopReason) {
         self.emit(EventKind::TurnDone { turn: self.row.turn, stop, usage: None, cost_usd: None, duration_ms: 0 });
@@ -588,6 +606,7 @@ impl Actor {
         match o {
             DriverOut::Event(kind) => {
                 self.last_active = Instant::now();
+                self.agent_turn(&kind);
                 match kind {
                     EventKind::Session { session_id, model } => {
                         if self.row.session_id.as_deref() != Some(&session_id) {
