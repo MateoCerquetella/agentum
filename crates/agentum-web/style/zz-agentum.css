@@ -102,6 +102,7 @@
 .dk-dots { display: inline-flex; align-items: center; gap: 4px; }
 /* Dockside's status colours (its default palette), one per state. */
 .dk-proj, .dk-li, .dk-slim { --dk-working: #facc15; --dk-waiting: #fb923c; --dk-unread: #5ba4e6; --dk-error: #e5484d; }
+html[data-scheme="light"] :is(.dk-proj, .dk-li, .dk-slim) { --dk-working: #ca8a04; --dk-waiting: #ea580c; --dk-unread: #2563eb; --dk-error: #dc2626; }
 @keyframes dk-spin { to { transform: rotate(360deg); } }
 .dk-dot { width: 7px; height: 7px; border-radius: 99px; }
 .dk-dot.ask { background: var(--dk-waiting); }
