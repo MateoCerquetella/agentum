@@ -77,29 +77,84 @@ fn needs_you(t: &ThreadSummary) -> bool {
     t.attention == Attention::NeedsYou
 }
 
-/// The glyph before a title: working (spins), needs you (filled), unread (a ring), else the agent.
+/// Dockside's working spinner. The list is rebuilt on every thread update (and on a click), so a
+/// plain CSS spin restarted at 0° each time and looked stuck or jumped. Once the span is in the
+/// page its animation is pinned to the page timeline's origin, so every spinner shares one phase
+/// and a rebuilt one carries on exactly where the old one was.
+#[component]
+fn Spinner(#[prop(into)] class: String, size: u32) -> impl IntoView {
+    let el = NodeRef::<leptos::html::Span>::new();
+    // After the list's rebuild is in the page (a microtask, so before it paints); once more a frame
+    // later if it was not attached yet.
+    el.on_load(|el| {
+        let el: web_sys::Element = el.into();
+        spawn_local(async move {
+            if !pin_to_timeline(&el) {
+                request_animation_frame(move || {
+                    pin_to_timeline(&el);
+                });
+            }
+        })
+    });
+    view! { <span node_ref=el class=class title="Working"><Icon name="loading" size=size/></span> }
+}
+
+/// Whether it found an animation to pin.
+fn pin_to_timeline(el: &web_sys::Element) -> bool {
+    use js_sys::{Array, Function, Reflect};
+    use wasm_bindgen::{JsCast, JsValue};
+    let Some(get) = Reflect::get(el, &"getAnimations".into()).ok().and_then(|f| f.dyn_into::<Function>().ok()) else { return true };
+    let Some(list) = get.call0(el).ok().and_then(|l| l.dyn_into::<Array>().ok()) else { return true };
+    for a in list.iter() {
+        let _ = Reflect::set(&a, &"startTime".into(), &JsValue::from_f64(0.0));
+    }
+    list.length() > 0
+}
+
+/// The glyph before a title, Dockside's: failed (circle-x), needs you (circle-question), working
+/// (spins), unread (an eye), else the agent.
 #[component]
 fn Glyph(t: ThreadSummary) -> impl IntoView {
     if needs_you(&t) {
         let failed = t.state == ThreadState::Error;
-        view! { <span class=if failed { "dk-g dk-g-fail" } else { "dk-g dk-g-ask" } title=if failed { "Stopped with an error" } else { "Needs you" }/> }.into_any()
+        let (class, icon, title) = if failed { ("dk-g dk-g-fail", "x-circle", "Stopped with an error") } else { ("dk-g dk-g-ask", "help", "Needs you") };
+        view! { <span class=class title=title><Icon name=icon size=14/></span> }.into_any()
     } else if working(&t) {
-        view! { <span class="dk-g dk-g-work" title="Working"/> }.into_any()
+        view! { <Spinner class="dk-g dk-g-work" size=14/> }.into_any()
     } else if t.unread {
-        view! { <span class="dk-g dk-g-unread" title="Unread"/> }.into_any()
+        view! { <span class="dk-g dk-g-unread" title="Unread"><Icon name="eye" size=14/></span> }.into_any()
     } else {
         view! { <span class="dk-g dk-g-agent"><Icon name=agent_icon(t.agent) size=12/></span> }.into_any()
     }
 }
 
-fn status_label(t: &ThreadSummary) -> String {
+/// Dockside's coloured status pill under the time: (class, label).
+fn pill(t: &ThreadSummary) -> Option<(&'static str, &'static str)> {
     if needs_you(t) {
-        if t.state == ThreadState::Error { "Failed".into() } else { "Needs you".into() }
+        Some(if t.state == ThreadState::Error { ("dk-pill fail", "Failed") } else { ("dk-pill ask", "Needs you") })
     } else if working(t) {
-        "Working".into()
+        Some(("dk-pill work", "Working"))
+    } else if t.unread {
+        Some(("dk-pill unread", "Unread"))
     } else {
-        ago_ms(t.updated_at)
+        None
     }
+}
+
+/// Dockside's automatic project badge colours (FNV-1a of the project), with the text colour that
+/// reads best on each.
+fn badge_colors(project: &str) -> (&'static str, &'static str) {
+    const PALETTE: [(&str, &str); 12] = [
+        ("#2563EB", "#FFFFFF"), ("#7C3AED", "#FFFFFF"), ("#C026D3", "#FFFFFF"), ("#DB2777", "#FFFFFF"),
+        ("#DC2626", "#FFFFFF"), ("#EA580C", "#000000"), ("#CA8A04", "#000000"), ("#16A34A", "#000000"),
+        ("#059669", "#000000"), ("#0891B2", "#000000"), ("#0284C7", "#000000"), ("#4F46E5", "#FFFFFF"),
+    ];
+    let mut h: u32 = 0x811c9dc5;
+    for c in project.encode_utf16() {
+        h ^= c as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    PALETTE[h as usize % PALETTE.len()]
 }
 
 fn menu_for(t: &ThreadSummary) -> Vec<PaneAction> {
@@ -138,6 +193,22 @@ fn open_thread(e: &leptos::ev::MouseEvent, id: &str) {
     navigate("code", if e.meta_key() || e.ctrl_key() || e.alt_key() { Where::Right } else { Where::Replace }, &[("thread", id)]);
 }
 
+/// The row link under a pointer event, and its thread.
+fn hit_thread(e: &leptos::ev::PointerEvent) -> Option<String> {
+    use wasm_bindgen::JsCast;
+    e.target()?.dyn_into::<web_sys::Element>().ok()?.closest("a.dk-hit[data-thread]").ok()??.get_attribute("data-thread")
+}
+
+/// A row's link only handles the keyboard (Enter). A mouse click on a row is caught by the list
+/// itself in pointerdown/pointerup: the list redraws on every thread update, so a working row is
+/// often replaced between press and release and the browser drops the click.
+fn row_click(e: leptos::ev::MouseEvent, id: &str) {
+    e.prevent_default();
+    if e.detail() == 0 {
+        open_thread(&e, id)
+    }
+}
+
 /// One root thread (two lines) and its side chats.
 #[component]
 fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, on_r: Signal<Option<String>>) -> impl IntoView {
@@ -170,8 +241,8 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                 on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))
                 on:mouseenter=move |_| timer.set_value(Some(gloo_timers::callback::Timeout::new(500, move || { let _ = hover.try_set(true); })))
                 on:mouseleave=move |_| { let _ = timer.try_set_value(None); let _ = hover.try_set(false); }>
-                <a class="dk-hit" href=format!("/code?thread={}", id_click) aria-label=title.clone() draggable="false"
-                    on:click=move |e: leptos::ev::MouseEvent| { if e.button() == 0 { e.prevent_default(); open_thread(&e, &id_click) } }/>
+                <a class="dk-hit" href=format!("/code?thread={}", id_click) data-thread=id_click.clone() aria-label=title.clone() draggable="false"
+                    on:click=move |e: leptos::ev::MouseEvent| row_click(e, &id_click)/>
                 <Glyph t=t.clone()/>
                 <div class="dk-body">
                     <div class="dk-l1">
@@ -181,13 +252,14 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                     <div class="dk-l2">{meta}{badges}{has_kids.then(|| view! { <span class="dk-kidsn" title="Side chats">{kids.len()}</span> })}</div>
                 </div>
                 <div class="dk-right">
-                    <span class=if can_park { "dk-status can-park" } else { "dk-status" }>{status_label(&t)}</span>
+                    <span class=if can_park { "dk-status can-park" } else { "dk-status" }>{ago_ms(t.updated_at)}</span>
                     {can_park.then(|| view! {
                         <span class="dk-park">
                             <button class="icon-btn" title="Snooze until tomorrow 09:00" on:click=move |_| patch_thread(&id_snooze, PatchThread { snoozed_until: Some(Some(tomorrow_9())), ..Default::default() })><Icon name="alarm" size=13/></button>
                             <button class="icon-btn" title="Settle (done; archived, shown for a day)" on:click=move |_| patch_thread(&id_settle, PatchThread { archived: Some(true), ..Default::default() })><Icon name="check" size=13/></button>
                         </span>
                     })}
+                    {pill(&t).map(|(class, label)| view! { <span class=class>{label}</span> })}
                 </div>
                 {move || hover.get().then(|| {
                     let views = crate::plugins::thread_hover(&t_hover);
@@ -221,8 +293,8 @@ fn Slim(t: ThreadSummary, on: Signal<Option<String>>, on_r: Signal<Option<String
         <li class=move || if is_on.get() { "dk-slim on" } else { "dk-slim" } draggable="true"
             on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", &id_d)])
             on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))>
-            <a class="dk-hit" href=format!("/code?thread={}", id_c) draggable="false"
-                on:click=move |e: leptos::ev::MouseEvent| { if e.button() == 0 { e.prevent_default(); open_thread(&e, &id_c) } }/>
+            <a class="dk-hit" href=format!("/code?thread={}", id_c) data-thread=id_c.clone() draggable="false"
+                on:click=move |e: leptos::ev::MouseEvent| row_click(e, &id_c)/>
             <Glyph t=t.clone()/>
             <span class="dk-title">{if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() }}</span>
             <span class="dk-status">{when}</span>
@@ -246,18 +318,19 @@ fn Project(path: String, fam: Vec<(ThreadSummary, Vec<ThreadSummary>)>, on: Sign
     let n = fam.len();
     let machine = fam.first().map(|(r, _)| r.machine.clone()).unwrap_or_default();
     let (p2, m2) = (path.clone(), machine.clone());
+    let badge = { let (bg, fg) = badge_colors(&path); format!("background:{bg};color:{fg}") };
     let letter = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "•".into());
     view! {
         <section class="dk-proj">
             <div class="dk-proj-h">
                 <button class="dk-proj-btn" aria-expanded=move || open.get().to_string() title=path.clone()
                     on:click=move |_| { open.update(|o| *o = !*o); agentum_ui::store::set(&key, if open.get_untracked() { "" } else { "1" }) }>
-                    <span class="dk-init">{letter}</span>
+                    <span class="dk-init" style=badge>{letter}</span>
                     <span class="dk-proj-name">{name.clone()}</span>
                     <span class="dk-count">{n}</span>
                     <span class="dk-dots">
                         {asks.then(|| view! { <span class="dk-dot ask"/> })}
-                        {work.then(|| view! { <span class="dk-dot work"/> })}
+                        {work.then(|| view! { <Spinner class="dk-dot work" size=11/> })}
                         {unread.then(|| view! { <span class="dk-dot unread"/> })}
                     </span>
                     <Icon name="chevron" size=12 class=Signal::derive(move || if open.get() || force { "dk-chev open".to_string() } else { "dk-chev".to_string() })/>
@@ -327,6 +400,7 @@ pub fn Dockside(collapsed: RwSignal<bool>, #[prop(into)] mail_open: Signal<bool>
             }
         }
     });
+    let press = StoredValue::new(None::<(String, i32, i32)>);
     let on = Signal::derive(move || l_thread.get());
     let on_r = Signal::derive(move || r_thread.get());
     let dock_on = move || crate::plugins::is_on("dockside");
@@ -378,7 +452,18 @@ pub fn Dockside(collapsed: RwSignal<bool>, #[prop(into)] mail_open: Signal<bool>
                 <div class="dk-head"><Icon name="folder" size=13/><span>{move || if dock_on() { "Projects" } else { "Threads" }}</span>
                     <span class="dk-count">{move || ov.with(|o| o.as_ref().map(|o| group(&o.threads, now.get(), "").projects.len()).unwrap_or(0))}</span>
                 </div>
-                <div class="dk-scroll">
+                <div class="dk-scroll"
+                    on:pointerdown=move |e| press.set_value((e.button() == 0).then(|| hit_thread(&e).map(|id| (id, e.client_x(), e.client_y()))).flatten())
+                    on:pointerup=move |e| {
+                        // A press and release on the same row, without dragging, opens it.
+                        if let Some((id, x, y)) = press.get_value() {
+                            press.set_value(None);
+                            if e.button() == 0 && hit_thread(&e).as_deref() == Some(id.as_str()) && (e.client_x() - x).abs() + (e.client_y() - y).abs() < 6 {
+                                open_thread(&e, &id)
+                            }
+                        }
+                    }
+                    on:pointercancel=move |_| press.set_value(None)>
                     {list}
                 </div>
             </div>

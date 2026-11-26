@@ -100,10 +100,14 @@
 .dk-proj-new { opacity: 0; width: 24px; height: 24px; }
 .dk-proj-h:hover .dk-proj-new { opacity: 1; }
 .dk-dots { display: inline-flex; align-items: center; gap: 4px; }
+/* Dockside's status colours (its default palette), one per state. */
+.dk-proj, .dk-li, .dk-slim { --dk-working: #34a853; --dk-waiting: #f5a524; --dk-unread: #5ba4e6; --dk-error: #e5484d; }
+@keyframes dk-spin { to { transform: rotate(360deg); } }
 .dk-dot { width: 7px; height: 7px; border-radius: 99px; }
-.dk-dot.ask { background: var(--warm); }
-.dk-dot.work { border: 2px solid var(--primary); border-right-color: transparent; width: 9px; height: 9px; animation: agentum-spin .9s linear infinite; }
-.dk-dot.unread { border: 2px solid var(--primary); }
+.dk-dot.ask { background: var(--dk-waiting); }
+.dk-dot.work { width: 11px; height: 11px; display: grid; place-items: center; color: var(--dk-working); animation: dk-spin 1s linear infinite; }
+.dk-dot.work svg, .dk-g-work svg { stroke-width: 2; }
+.dk-dot.unread { border: 2px solid var(--dk-unread); }
 .dk-chev { color: var(--subdue); transition: transform .15s; }
 .dk-chev.open { transform: rotate(180deg); }
 .dk-list { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -115,10 +119,17 @@
 .dk-card > :not(.dk-hit):not(.hover-card), .dk-slim > :not(.dk-hit) { position: relative; pointer-events: none; }
 .dk-card .dk-park, .dk-card .dk-park *, .dk-slim .dk-restore, .dk-slim .dk-restore * { pointer-events: auto; }
 .dk-g { flex: none; width: 14px; height: 14px; margin-top: 2px; border-radius: 99px; display: grid; place-items: center; color: var(--subdue); }
-.dk-g-ask { background: var(--warm); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warm) 25%, transparent); width: 9px; height: 9px; margin: 5px 2.5px 0; }
-.dk-g-fail { background: var(--negative); width: 9px; height: 9px; margin: 5px 2.5px 0; }
-.dk-g-work { border: 2px solid var(--primary); border-right-color: transparent; animation: agentum-spin .9s linear infinite; width: 12px; height: 12px; margin: 3px 1px 0; }
-.dk-g-unread { border: 2px solid var(--primary); width: 10px; height: 10px; margin: 4px 2px 0; }
+.dk-g-ask { color: var(--dk-waiting); }
+.dk-g-fail { color: var(--dk-error); }
+.dk-g-work { color: var(--dk-working); animation: dk-spin 1s linear infinite; }
+.dk-g-unread { color: var(--dk-unread); }
+.dk-g-ask svg, .dk-g-fail svg, .dk-g-unread svg { stroke-width: 2; }
+/* Dockside's status pill: the state's colour on a tint of itself. */
+.dk-pill { --c: var(--subdue); padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 600; line-height: 16px; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.dk-pill.work { --c: var(--dk-working); }
+.dk-pill.ask { --c: var(--dk-waiting); }
+.dk-pill.fail { --c: var(--dk-error); }
+.dk-pill.unread { --c: var(--dk-unread); }
 .dk-body { flex: 1; min-width: 0; }
 .dk-l1 { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .dk-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--base); }
@@ -154,7 +165,7 @@
 /* Dockside's two-line cards need room: the sidebar is 280px in every look (drag its edge to change). */
 .sidebar:not(.collapsed) { width: 280px; }
 @media (max-width: 760px) { .sidebar:not(.collapsed) { width: 86vw; } }
-.dk-right { width: auto; min-width: 34px; max-width: 76px; }
+.dk-right { width: auto; min-width: 34px; max-width: 84px; }
 .dk-l2 > span:not(.dk-branch):not(.dk-kidsn) { flex: none; }
 .pane-head .title { flex: 0 1 auto; max-width: 70%; }
 .pane-sub { flex: 1 1 0; }

@@ -15,6 +15,9 @@ pub fn path(name: &str) -> &'static str {
         "x" => "M18 6 6 18M6 6l12 12",
         "plus" => "M12 5v14M5 12h14",
         "check" => "M20 6 9 17l-5-5",
+        // Dockside's spinner (hugeicons Loading03): eight spokes.
+        "x-circle" => "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM15 9l-6 6M9 9l6 6",
+        "loading" => "M12 3v3M12 18v3M21 12h-3M6 12H3M18.36 5.64l-2.12 2.12M7.76 16.24l-2.12 2.12M18.36 18.36l-2.12-2.12M7.76 7.76 5.64 5.64",
         "chevron" => "m6 9 6 6 6-6",
         "sidebar" => "M3 4h18v16H3zM9 4v16",
         "globe" => "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
