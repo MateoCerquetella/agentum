@@ -84,9 +84,13 @@ fn needs_you(t: &ThreadSummary) -> bool {
 /// and a rebuilt one carries on exactly where the old one was.
 #[component]
 fn Spinner(#[prop(into)] class: String, size: u32) -> impl IntoView {
+    view! { <span node_ref=pinned() class=class title=Mark::Working.label()><Icon name="loading" size=size/></span> }
+}
+
+/// A span whose looping animation is pinned to the page timeline once it is in the page: after the
+/// list's rebuild is attached (a microtask, so before it paints), once more a frame later if not.
+fn pinned() -> NodeRef<leptos::html::Span> {
     let el = NodeRef::<leptos::html::Span>::new();
-    // After the list's rebuild is in the page (a microtask, so before it paints); once more a frame
-    // later if it was not attached yet.
     el.on_load(|el| {
         let el: web_sys::Element = el.into();
         spawn_local(async move {
@@ -97,7 +101,26 @@ fn Spinner(#[prop(into)] class: String, size: u32) -> impl IntoView {
             }
         })
     });
-    view! { <span node_ref=el class=class title=Mark::Working.label()><Icon name="loading" size=size/></span> }
+    el
+}
+
+thread_local! {
+    /// Threads whose unread tick has already popped in (the list rebuilds on every update).
+    static POPPED: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
+/// Whether the unread tick should pop now: only the first time a thread is drawn unread, and again
+/// only after it has been read.
+fn first_unread(id: &str, unread: bool) -> bool {
+    POPPED.with(|p| {
+        let mut p = p.borrow_mut();
+        if unread {
+            p.insert(id.to_string())
+        } else {
+            p.remove(id);
+            false
+        }
+    })
 }
 
 /// Whether it found an animation to pin.
@@ -160,12 +183,15 @@ impl Mark {
 /// Dockside's status mark: the spinner, a filled circle with a cut-out (!, x or a tick), or a
 /// clock/hourglass for a quiet thread. `dot` draws a quiet child as Dockside does, a faint dot.
 #[component]
-fn StatusMark(mark: Mark, #[prop(optional)] dot: bool) -> impl IntoView {
+fn StatusMark(mark: Mark, #[prop(into)] id: String, #[prop(optional)] dot: bool) -> impl IntoView {
     let title = mark.label();
+    let pop = first_unread(&id, mark == Mark::Unread);
     let filled = |kind: &'static str, cut: &'static str| {
         let id = format!("dk-cut-{kind}");
+        // The pulses (needs you, failed) keep one phase across rebuilds; the tick pops only once.
+        let el = if kind == "unread" { NodeRef::new() } else { pinned() };
         view! {
-            <span class=format!("dk-mark dk-mark-{kind}") title=title>
+            <span node_ref=el class=format!("dk-mark dk-mark-{kind}{}", if pop { " pop" } else { "" }) title=title>
                 <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
                     <mask id=id.clone()><rect width="20" height="20" fill="white"/><path d=cut fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></mask>
                     <circle cx="10" cy="10" r="8.5" fill="currentColor" mask=format!("url(#{id})")/>
@@ -316,7 +342,7 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                             </button>
                         })}
                         <span class=format!("dk-agent um-{}", agent.id())><AgentMark agent=agent size=13/></span>
-                        <StatusMark mark=mark/>
+                        <StatusMark mark=mark id=id.clone()/>
                     </div>
                 </div>
                 {move || hover.get().then(|| {
@@ -356,7 +382,7 @@ fn Slim(t: ThreadSummary, on: Signal<Option<String>>, on_r: Signal<Option<String
             <span class=format!("dk-agent um-{}", t.agent.id())><AgentMark agent=t.agent size=13/></span>
             <span class="dk-title">{if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() }}</span>
             <span class="dk-status">{when}</span>
-            <StatusMark mark=mark_of(&[&t], agentum_ui::fmt::now_ms()) dot=true/>
+            <StatusMark mark=mark_of(&[&t], agentum_ui::fmt::now_ms()) id=id.clone() dot=true/>
             {restore.map(|r| view! {
                 <button class="icon-btn dk-restore" title=if r == "snooze" { "Wake it now" } else { "Unsettle" }
                     on:click=move |_| patch_thread(&id_r, if r == "snooze" { PatchThread { snoozed_until: Some(None), ..Default::default() } } else { PatchThread { archived: Some(false), ..Default::default() } })>
