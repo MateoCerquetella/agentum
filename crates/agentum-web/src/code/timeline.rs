@@ -13,6 +13,8 @@ enum Item {
     Message { seq: u64, html: String, ts: i64, ev: EventView },
     Thinking { seq: u64, text: String },
     Tool { seq: u64, item: String, name: String, kind: ToolKind, title: String, input: Value, done: Option<(bool, Option<String>, Vec<FileDiff>)>, cards: Vec<Rich> },
+    /// A run of tool calls in a row, folded into one quiet line (as the Empirical Factory does).
+    Work { seq: u64, tools: Vec<Item> },
     Plan { seq: u64, entries: Vec<PlanEntry> },
     Ask { seq: u64, id: String, kind: AskKind, title: String, detail: Option<String>, options: Vec<AskOption>, answer: Option<(String, Option<String>)> },
     /// `steps`: the tool calls in the turn, `failed` of them failing.
@@ -25,6 +27,7 @@ impl Item {
     fn key(&self) -> String {
         match self {
             Item::Tool { seq, done, .. } => format!("{seq}:{}", done.is_some()),
+            Item::Work { seq, tools } => format!("w{seq}:{}:{}", tools.len(), tools.iter().filter(|t| matches!(t, Item::Tool { done: Some(_), .. })).count()),
             Item::Ask { seq, answer, .. } => format!("{seq}:{}", answer.is_some()),
             Item::User { seq, queued, .. } => format!("{seq}:{queued}"),
             Item::Message { seq, .. } | Item::Thinking { seq, .. } | Item::Plan { seq, .. } | Item::Turn { seq, .. } | Item::Error { seq, .. } | Item::Notice { seq, .. } => seq.to_string(),
@@ -115,7 +118,19 @@ fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
             _ => {}
         }
     }
-    out
+    // Tool calls in a row become one group.
+    let mut grouped: Vec<Item> = Vec::with_capacity(out.len());
+    for it in out {
+        let Item::Tool { seq, .. } = &it else {
+            grouped.push(it);
+            continue;
+        };
+        match grouped.last_mut() {
+            Some(Item::Work { tools, .. }) => tools.push(it),
+            _ => grouped.push(Item::Work { seq: *seq, tools: vec![it] }),
+        }
+    }
+    grouped
 }
 
 fn tool_icon(k: ToolKind) -> &'static str {
@@ -198,7 +213,7 @@ fn input_summary(name: &str, input: &Value) -> String {
 
 #[component]
 fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl IntoView {
-    let Item::Tool { name, kind, title, input, done, cards, .. } = item else { return ().into_any() };
+    let Item::Tool { name, kind, title, input, done, .. } = item else { return ().into_any() };
     let open = RwSignal::new(false);
     let status = match &done {
         None => "tool-run",
@@ -230,9 +245,72 @@ fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl Int
                 <pre class="tool-out live">{move || live.get().unwrap_or_default()}</pre>
             </Show>
         </div>
-        // Shown even when the row is folded.
-        {(!cards.is_empty()).then(|| view! { <div class="rich-cards">{cards.into_iter().map(|r| view! { <RichCard r=r/> }).collect_view()}</div> })}
     }.into_any()
+}
+
+/// "Worked · 5 steps · 2 commands, 3 reads · 1 failed", which opens to the steps; the cards their
+/// output came to (the newest of each kind) stay below it, open or not.
+#[component]
+fn WorkGroup(seq: u64, tools: Vec<Item>, thread: String, partial: RwSignal<BTreeMap<String, Partial>>, opened: RwSignal<BTreeSet<u64>>) -> impl IntoView {
+    let running = tools.iter().any(|t| matches!(t, Item::Tool { done: None, .. }));
+    let failed = tools.iter().filter(|t| matches!(t, Item::Tool { done: Some((false, ..)), .. })).count();
+    let diff = tools.iter().any(|t| matches!(t, Item::Tool { done: Some((_, _, d)), .. } if !d.is_empty()));
+    if diff && agentum_ui::store::flag("agentum.diffs.open") {
+        opened.update(|o| {
+            o.insert(seq);
+        });
+    }
+    let mut kinds: Vec<(&str, usize)> = vec![];
+    let mut cards: Vec<Rich> = vec![];
+    for t in &tools {
+        let Item::Tool { kind, cards: c, .. } = t else { continue };
+        let word = match kind {
+            ToolKind::Read => "read",
+            ToolKind::Edit => "edit",
+            ToolKind::Exec => "command",
+            ToolKind::Search => "search",
+            ToolKind::Fetch => "fetch",
+            ToolKind::Task => "task",
+            ToolKind::Other => "tool",
+        };
+        match kinds.iter_mut().find(|(w, _)| *w == word) {
+            Some((_, n)) => *n += 1,
+            None => kinds.push((word, 1)),
+        }
+        for r in c {
+            cards.retain(|x| std::mem::discriminant(x) != std::mem::discriminant(r));
+            cards.push(r.clone());
+        }
+    }
+    let what = kinds.iter().map(|(w, n)| if *n == 1 { format!("1 {w}") } else if *w == "search" { format!("{n} searches") } else { format!("{n} {w}s") }).collect::<Vec<_>>().join(", ");
+    let n = tools.len();
+    let open = move || running || opened.with(|o| o.contains(&seq));
+    let toggle = move |_| {
+        opened.update(|o| {
+            if !o.remove(&seq) {
+                o.insert(seq);
+            }
+        })
+    };
+    view! {
+        <div class="work" class:open=open>
+            <button class="work-head" on:click=toggle aria-expanded=move || open().to_string()>
+                <Icon name="chevron-right" size=12 class="chev"/>
+                <span>{if running { "Working" } else { "Worked" }}{format!(" · {n} step{}", if n == 1 { "" } else { "s" })}</span>
+                <span class="work-what truncate">{format!("· {what}")}</span>
+                {(failed > 0).then(|| view! { <span class="neg">{format!("· {failed} failed")}</span> })}
+                {running.then(|| view! { <span class="spin-dot" aria-label="Running"/> })}
+            </button>
+            <Show when=open>
+                <div class="work-steps">{tools.clone().into_iter().map(|it| {
+                    let key = if let Item::Tool { item, .. } = &it { format!("tool:{item}") } else { String::new() };
+                    let live = Signal::derive(move || partial.with(|p| p.get(&key).map(|x| x.text.clone())));
+                    view! { <ToolRow item=it thread=thread.clone() live=live/> }
+                }).collect_view()}</div>
+            </Show>
+            {(!cards.is_empty()).then(|| view! { <div class="rich-cards">{cards.into_iter().map(|r| view! { <RichCard r=r/> }).collect_view()}</div> })}
+        </div>
+    }
 }
 
 /// What a command's output came to: a test run, changed files, commits, errors.
@@ -243,7 +321,7 @@ fn RichCard(r: Rich) -> impl IntoView {
         Rich::Tests { pass, fail, skip, files, secs, failures } => {
             let total = pass + fail + skip;
             let bad = fail > 0;
-            let meta = format!("{total} tests{}{}", files.map(|f| format!(" · {f} files")).unwrap_or_default(), secs.filter(|s| *s > 0.0).map(|s| if s < 10.0 { format!(" · {s:.1}s") } else { format!(" · {}s", s.round()) }).unwrap_or_default());
+            let meta = format!("{total} tests{}{}", files.map(|f| format!(" · {f} files")).unwrap_or_default(), secs.filter(|s| *s > 0.0).map(|s| if s < 1.0 { format!(" · {}ms", (s * 1000.0).round()) } else if s < 10.0 { format!(" · {s:.1}s") } else { format!(" · {}s", s.round()) }).unwrap_or_default());
             view! {
                 <div class="rich" class:bad=bad>
                     <div class="rich-head">
@@ -365,6 +443,8 @@ pub fn Timeline(
     });
     let items = Memo::new(move |_| known.with(|k| events.with(|e| fold(e, k.as_deref().unwrap_or_default()))));
     let thread = move || summary.with(|s| s.as_ref().map(|s| s.id.clone()).unwrap_or_default());
+    // The tool groups opened by hand (by their first event), kept while the timeline redraws.
+    let opened = RwSignal::new(BTreeSet::<u64>::new());
     let scroller = NodeRef::<leptos::html::Div>::new();
     let stick = RwSignal::new(true);
     // Keep to the bottom while new things arrive, unless scrolled up.
@@ -430,11 +510,8 @@ pub fn Timeline(
                         Item::Thinking { seq, text } => view! {
                             <details class="thinking" id=format!("ev-{seq}")><summary>"Thinking"</summary><div class="thinking-text">{text}</div></details>
                         }.into_any(),
-                        it @ Item::Tool { .. } => {
-                            let key = if let Item::Tool { item, .. } = &it { format!("tool:{item}") } else { String::new() };
-                            let live = Signal::derive(move || partial.with(|p| p.get(&key).map(|x| x.text.clone())));
-                            view! { <ToolRow item=it thread=th live=live/> }.into_any()
-                        }
+                        Item::Work { seq, tools } => view! { <WorkGroup seq=seq tools=tools thread=th partial=partial opened=opened/> }.into_any(),
+                        Item::Tool { .. } => ().into_any(),
                         Item::Plan { entries, .. } => view! {
                             <div class="plan">{entries.into_iter().map(|e| view! {
                                 <div class=format!("plan-item {}", e.status)><Icon name=match e.status.as_str() { "done" => "check", "in-progress" => "dot", _ => "circle" } size=12/>{e.text}</div>
