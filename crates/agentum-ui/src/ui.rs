@@ -177,3 +177,22 @@ pub fn Modal(#[prop(into)] title: String, on_close: Callback<()>, #[prop(optiona
         </div>
     }
 }
+
+/// Scroll `el` into view inside its nearest vertically scrolling ancestor, and only that one.
+/// Unlike `scrollIntoView`, it never scrolls the page or a clipped container (sideways or not).
+pub fn reveal(el: &web_sys::Element, smooth: bool) {
+    let Some(win) = web_sys::window() else { return };
+    let mut p = el.parent_element();
+    while let Some(s) = p {
+        let overflow = win.get_computed_style(&s).ok().flatten().and_then(|cs| cs.get_property_value("overflow-y").ok()).unwrap_or_default();
+        if (overflow == "auto" || overflow == "scroll") && s.scroll_height() > s.client_height() {
+            let top = s.scroll_top() as f64 + el.get_bounding_client_rect().top() - s.get_bounding_client_rect().top() - 8.0;
+            let o = web_sys::ScrollToOptions::new();
+            o.set_top(top.max(0.0));
+            o.set_behavior(if smooth { web_sys::ScrollBehavior::Smooth } else { web_sys::ScrollBehavior::Auto });
+            s.scroll_to_with_scroll_to_options(&o);
+            return;
+        }
+        p = s.parent_element();
+    }
+}

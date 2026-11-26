@@ -27,10 +27,11 @@ impl HubPlugin for Plugin {
     }
 
     async fn on_event(&self, cx: &Ctx, t: &ThreadSummary, e: &Event) {
-        let (title, body) = match &e.kind {
+        // `sound`: which one open pages play (web.rs): needs you, done, failed.
+        let (title, body, sound) = match &e.kind {
             EventKind::Ask { kind, title, .. } if cx.setting("on_ask").await != false => {
                 let what = if *kind == AskKind::Permission { "asks permission" } else { "has a question" };
-                (format!("{} {what}", name(t)), title.clone())
+                (format!("{} {what}", name(t)), title.clone(), "ask")
             }
             EventKind::TurnDone { stop, duration_ms, cost_usd, .. } if *stop != StopReason::Interrupted && cx.setting("on_done").await != false => {
                 let head = if *stop == StopReason::End { "Done" } else { "Failed" };
@@ -45,19 +46,21 @@ impl HubPlugin for Plugin {
                 if !facts.is_empty() {
                     body = if body.is_empty() { facts.join(" · ") } else { format!("{body} ({})", facts.join(" · ")) };
                 }
-                (format!("{head}: {}", name(t)), body)
+                (format!("{head}: {}", name(t)), body, if *stop == StopReason::End { "done" } else { "failed" })
             }
             _ => return,
         };
         if quiet_now(cx).await {
             return;
         }
+        cx.publish(json!({ "sound": sound, "thread": t.id }));
         cx.notify(&title, &body, &format!("/code?thread={}", t.id)).await;
     }
 
     async fn rpc(&self, cx: &Ctx, method: &str, _input: Value) -> Result<Value, String> {
         match method {
             "test" => {
+                cx.publish(json!({ "sound": "done", "thread": "" }));
                 cx.notify("Agentum", "Notifications work: this is how a thread will reach you.", "/code").await;
                 Ok(json!({ "ok": true, "quiet": quiet_now(cx).await }))
             }

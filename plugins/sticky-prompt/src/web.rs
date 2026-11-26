@@ -18,10 +18,8 @@ fn scroll_to(seq: u64) {
         toast("It's further up: load the earlier messages to reach it.");
         return;
     };
-    let o = web_sys::ScrollIntoViewOptions::new();
-    o.set_behavior(web_sys::ScrollBehavior::Smooth);
-    o.set_block(web_sys::ScrollLogicalPosition::Start);
-    el.scroll_into_view_with_scroll_into_view_options(&o);
+    // Only the timeline scrolls: scrollIntoView could also shift the page sideways.
+    agentum_ui::ui::reveal(&el, true);
     // Flash it again even if it flashed before.
     let cl = el.class_list();
     let _ = cl.remove_1("flash");

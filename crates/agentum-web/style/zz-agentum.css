@@ -258,3 +258,6 @@ a.dk-hit { display: block; }
 .msg.user.queued .msg-meta { display: flex; align-items: center; gap: 6px; }
 .q-act { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; cursor: pointer; }
 .q-act:hover { background: var(--hl); }
+/* The app's frame never shifts sideways: nothing wide inside can push it, and nothing can scroll it
+   (clip, unlike hidden, can't be scrolled by code either). */
+.shell, .main { overflow: clip; }

@@ -526,7 +526,7 @@ pub fn Timeline(
         stick.set(false);
         request_animation_frame(move || {
             if let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(&format!("ev-{seq}"))) {
-                el.scroll_into_view();
+                agentum_ui::ui::reveal(&el, false);
                 let _ = el.class_list().add_1("flash");
             }
         });

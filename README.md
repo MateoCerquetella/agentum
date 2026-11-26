@@ -143,6 +143,8 @@ Agentum stands on other people's work, and borrows ideas from projects it is gla
 - [BB](https://getbb.app): how the Coding side moves around threads, the sidebar (Dockside), the
   new-thread composer and plugins mounted in slots.
 - [Steel](https://github.com/steel-dev/steel-browser): each project's browser (Surf).
+- [Orca](https://github.com/stablyai/orca): the notification sounds, from when Agentum's desktop app
+  was built on it.
 - [Speaches](https://github.com/speaches-ai/speaches) (Whisper and Kokoro) for voice, and
   [Ollama](https://ollama.com) for the Secretary's local model.
 - [Leptos](https://leptos.dev), [axum](https://github.com/tokio-rs/axum),

@@ -1,10 +1,10 @@
-//! Notifications: A push when a thread needs you or finishes.
+//! Notifications: a push, a toast and a sound when a thread needs you or finishes.
 use agentum_plugin::{Group, Manifest, SettingDef, SettingKind};
 
 pub static MANIFEST: Manifest = Manifest {
     id: "notify",
     name: "Notifications",
-    description: "A push when a thread needs you or finishes.",
+    description: "A push, a toast and a sound when a thread needs you or finishes.",
     icon: "bell",
     group: Group::Usage,
     default_on: true,

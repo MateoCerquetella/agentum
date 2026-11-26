@@ -105,7 +105,7 @@ impl HubCtx for PluginCtx {
         self.app.code.publish(&format!("plugin:{}", self.m.id), &WsOut::Plugin { plugin: self.m.id.to_string(), payload });
     }
     async fn notify(&self, title: &str, body: &str, url: &str) {
-        let msg = json!({"title": title, "body": body, "url": url, "tag": format!("agentum-{}", self.m.id)});
+        let msg = json!({"title": title, "body": body, "url": url, "tag": format!("agentum-{}:{url}", self.m.id)});
         crate::push::send_all(&self.app, msg.clone()).await;
         self.app.emit(json!({"kind": "toast", "title": title, "body": body, "url": url}));
     }

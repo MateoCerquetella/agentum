@@ -19,7 +19,7 @@ self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data && e.data.text() }; }
   e.waitUntil(self.registration.showNotification(m.title || 'CERQ', {
-    body: m.body || '', tag: m.tag || 'cerq', icon: '/icon-192.png', badge: '/favicon-32.png', data: { url: m.url || '/' },
+    body: m.body || '', tag: m.tag || 'cerq', renotify: true, icon: '/icon-192.png', badge: '/favicon-32.png', data: { url: m.url || '/' },
   }));
 });
 
