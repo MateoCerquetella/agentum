@@ -2,7 +2,7 @@
 //! its composer, questions and side panel (plugins' tabs: files, git, history, terminal…).
 mod attach;
 pub mod rich;
-pub mod marks;
+pub use agentum_ui::marks;
 pub mod store;
 mod timeline;
 mod typeahead;
@@ -24,15 +24,6 @@ pub fn page(_pane: Pane) -> AnyView {
         }}
     }
     .into_any()
-}
-
-pub(crate) fn agent_icon(a: AgentKind) -> &'static str {
-    match a {
-        AgentKind::ClaudeCode => "sparkle",
-        AgentKind::Codex => "terminal",
-        AgentKind::Opencode => "code",
-        AgentKind::Cursor => "cube",
-    }
 }
 
 fn perm_label(p: Permission) -> &'static str {
@@ -562,7 +553,7 @@ fn NewThreadPage() -> impl IntoView {
                                 <button class="home-recent-row" draggable="true"
                                     on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", &id2)])
                                     on:click=move |e| navigate("code", if e.meta_key() || e.ctrl_key() { Where::Right } else { at }, &[("thread", &id)])>
-                                    <Icon name=agent_icon(t.agent) size=13/>
+                                    <crate::code::marks::AgentMark agent=t.agent size=13/>
                                     <span class="grow truncate">{if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() }}</span>
                                     <span class="pk-dim">{format!("{} · {}", t.project.rsplit('/').next().unwrap_or(""), t.machine)}</span>
                                     <span class="pk-dim">{ago_ms(t.updated_at)}</span>

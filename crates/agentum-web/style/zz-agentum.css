@@ -119,6 +119,7 @@
 .dk-r1, .dk-r2 { display: flex; align-items: center; justify-content: flex-end; gap: 6px; height: 16px; }
 .dk-r2 { margin-top: 2px; }
 .dk-agent { flex: none; display: inline-grid; place-items: center; color: var(--subdue); }
+.dk-agent.um-claude-code { color: #d97757; }
 .dk-kids-btn { display: inline-flex; align-items: center; gap: 2px; height: 16px; padding: 0 2px; border: 0; border-radius: 4px; background: transparent; color: var(--subdue); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; box-shadow: none; }
 .dk-kids-btn:hover { background: var(--hl); color: var(--hi); }
 .dk-card.receded .dk-title { color: color-mix(in srgb, var(--subdue) 65%, transparent); }
