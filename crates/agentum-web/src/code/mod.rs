@@ -575,7 +575,10 @@ fn ThreadPage(id: String) -> impl IntoView {
         move || {
             let id = id.clone();
             spawn_local(async move {
-                match api_get::<ThreadDetail>(&format!("/code/threads/{id}")).await {
+                // The latest 150 events draw quickly; "Earlier" brings the rest. A search hit (?at=) may
+                // be further back, so then the usual 400.
+                let limit = if at_seq.get_untracked().is_some() { 400 } else { 150 };
+                match api_get::<ThreadDetail>(&format!("/code/threads/{id}?limit={limit}")).await {
                     Ok(d) => {
                         more_before.set(d.more_before);
                         partial.set(d.partial.into_iter().map(|p| (p.item.clone(), p)).collect());
@@ -634,7 +637,7 @@ fn ThreadPage(id: String) -> impl IntoView {
             let first = events.with_untracked(|e| e.first().map(|e| e.event.seq).unwrap_or(0));
             let id = id.clone();
             spawn_local(async move {
-                if let Ok(d) = api_get::<ThreadDetail>(&format!("/code/threads/{id}?before={first}")).await {
+                if let Ok(d) = api_get::<ThreadDetail>(&format!("/code/threads/{id}?before={first}&limit=150")).await {
                     more_before.set(d.more_before);
                     events.update(|e| {
                         let mut old = d.events;
