@@ -37,7 +37,8 @@ impl Item {
     fn key(&self) -> String {
         match self {
             Item::Tool { seq, done, .. } => format!("{seq}:{}", done.is_some()),
-            Item::Work { seq, tools } => format!("w{seq}:{}:{}", tools.len(), tools.iter().filter(|t| matches!(t, Item::Tool { done: Some(_), .. })).count()),
+            // Stable while the run grows: the group is not redrawn, so its spinners don't restart.
+            Item::Work { seq, .. } => format!("w{seq}"),
             Item::Ask { seq, answer, .. } => format!("{seq}:{}", answer.is_some()),
             Item::User { seq, queued, .. } => format!("{seq}:{queued}"),
             Item::Message { seq, .. } | Item::Thinking { seq, .. } | Item::Plan { seq, .. } | Item::Turn { seq, .. } | Item::Error { seq, .. } | Item::Notice { seq, .. } => seq.to_string(),
@@ -128,19 +129,28 @@ fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
             _ => {}
         }
     }
-    // Tool calls in a row become one group.
+    // Tool calls in a row become one group; thinking between them stays inside it.
     let mut grouped: Vec<Item> = Vec::with_capacity(out.len());
     for it in out {
-        let Item::Tool { seq, .. } = &it else {
-            grouped.push(it);
-            continue;
-        };
-        match grouped.last_mut() {
-            Some(Item::Work { tools, .. }) => tools.push(it),
-            _ => grouped.push(Item::Work { seq: *seq, tools: vec![it] }),
+        match (&it, grouped.last_mut()) {
+            (Item::Tool { .. } | Item::Thinking { .. }, Some(Item::Work { tools, .. })) => tools.push(it),
+            (Item::Tool { seq, .. }, _) => grouped.push(Item::Work { seq: *seq, tools: vec![it] }),
+            _ => grouped.push(it),
         }
     }
     grouped
+}
+
+/// A command's program, for the group's line: `cd x; D=y; grep …` is "grep".
+fn program(cmd: &str) -> String {
+    cmd.split(['\n', ';', '&', '|', '('])
+        .filter_map(|seg| {
+            let w = seg.split_whitespace().next()?;
+            (!matches!(w, "cd" | "set" | "export" | "then" | "do" | "else" | "fi" | "done") && !w.contains('=')).then_some(w)
+        })
+        .next()
+        .map(|w| w.trim_matches(['"', '\'']).rsplit('/').next().unwrap_or(w).chars().take(20).collect())
+        .unwrap_or_else(|| "command".into())
 }
 
 fn tool_icon(k: ToolKind) -> &'static str {
@@ -258,43 +268,72 @@ fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl Int
     }.into_any()
 }
 
-/// "Worked · 5 steps · 2 commands, 3 reads · 1 failed", which opens to the steps; the cards their
-/// output came to (the newest of each kind) stay below it, open or not.
+/// "Worked · 5 steps · grep 3 · read 2 · 1 failed", which opens to the steps; the cards their output came
+/// to (the newest of each kind) stay below it, open or not. It reads its steps from the timeline, so it
+/// stays the same element while the run grows. Open while running, on its last few steps.
 #[component]
-fn WorkGroup(seq: u64, tools: Vec<Item>, thread: String, partial: RwSignal<BTreeMap<String, Partial>>, opened: RwSignal<BTreeSet<u64>>) -> impl IntoView {
-    let running = tools.iter().any(|t| matches!(t, Item::Tool { done: None, .. }));
-    let failed = tools.iter().filter(|t| matches!(t, Item::Tool { done: Some((false, ..)), .. })).count();
-    let diff = tools.iter().any(|t| matches!(t, Item::Tool { done: Some((_, _, d)), .. } if !d.is_empty()));
-    if diff && agentum_ui::store::flag("agentum.diffs.open") {
-        opened.update(|o| {
-            o.insert(seq);
+fn WorkGroup(seq: u64, items: Memo<Vec<Item>>, thread: String, partial: RwSignal<BTreeMap<String, Partial>>, opened: RwSignal<BTreeSet<u64>>) -> impl IntoView {
+    const TAIL: usize = 5;
+    let thread = StoredValue::new(thread);
+    let tools = Memo::new(move |_| {
+        items.with(|v| v.iter().find_map(|x| match x {
+            Item::Work { seq: s, tools } if *s == seq => Some(tools.clone()),
+            _ => None,
+        }))
+        .unwrap_or_default()
+    });
+    let running = Memo::new(move |_| tools.with(|t| t.iter().any(|t| matches!(t, Item::Tool { done: None, .. }))));
+    let failed = move || tools.with(|t| t.iter().filter(|t| matches!(t, Item::Tool { done: Some((false, ..)), .. })).count());
+    Effect::new(move |_| {
+        let diff = tools.with(|t| t.iter().any(|t| matches!(t, Item::Tool { done: Some((_, _, d)), .. } if !d.is_empty())));
+        if diff && agentum_ui::store::flag("agentum.diffs.open") {
+            opened.update(|o| {
+                o.insert(seq);
+            });
+        }
+    });
+    let summary = move || {
+        tools.with(|tools| {
+            let mut kinds: Vec<(String, usize)> = vec![];
+            for t in tools {
+                let Item::Tool { kind, name, input, .. } = t else { continue };
+                let word = match kind {
+                    ToolKind::Read => "read".into(),
+                    ToolKind::Edit => "edit".into(),
+                    ToolKind::Exec => program(input["command"].as_str().unwrap_or(name)),
+                    ToolKind::Search => "search".into(),
+                    ToolKind::Fetch => "fetch".into(),
+                    ToolKind::Task => "task".into(),
+                    ToolKind::Other => name.to_lowercase(),
+                };
+                match kinds.iter_mut().find(|(w, _)| *w == word) {
+                    Some((_, n)) => *n += 1,
+                    None => kinds.push((word, 1)),
+                }
+            }
+            let n = tools.iter().filter(|t| matches!(t, Item::Tool { .. })).count();
+            kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
+            let what = kinds.into_iter().take(4).map(|(w, c)| if c > 1 { format!("{w} {c}") } else { w }).collect::<Vec<_>>().join(" · ");
+            (n, what)
+        })
+    };
+    let cards = move || {
+        let mut cards: Vec<Rich> = vec![];
+        tools.with(|t| {
+            for t in t {
+                let Item::Tool { cards: c, .. } = t else { continue };
+                for r in c {
+                    cards.retain(|x| std::mem::discriminant(x) != std::mem::discriminant(r));
+                    cards.push(r.clone());
+                }
+            }
         });
-    }
-    let mut kinds: Vec<(&str, usize)> = vec![];
-    let mut cards: Vec<Rich> = vec![];
-    for t in &tools {
-        let Item::Tool { kind, cards: c, .. } = t else { continue };
-        let word = match kind {
-            ToolKind::Read => "read",
-            ToolKind::Edit => "edit",
-            ToolKind::Exec => "command",
-            ToolKind::Search => "search",
-            ToolKind::Fetch => "fetch",
-            ToolKind::Task => "task",
-            ToolKind::Other => "tool",
-        };
-        match kinds.iter_mut().find(|(w, _)| *w == word) {
-            Some((_, n)) => *n += 1,
-            None => kinds.push((word, 1)),
-        }
-        for r in c {
-            cards.retain(|x| std::mem::discriminant(x) != std::mem::discriminant(r));
-            cards.push(r.clone());
-        }
-    }
-    let what = kinds.iter().map(|(w, n)| if *n == 1 { format!("1 {w}") } else if *w == "search" { format!("{n} searches") } else { format!("{n} {w}s") }).collect::<Vec<_>>().join(", ");
-    let n = tools.len();
-    let open = move || running || opened.with(|o| o.contains(&seq));
+        cards
+    };
+    let by_hand = move || opened.with(|o| o.contains(&seq));
+    let open = move || running.get() || by_hand();
+    // Open because it runs, not by you: only the newest steps.
+    let hidden = move || if by_hand() { 0 } else { tools.with(|t| t.len().saturating_sub(TAIL)) };
     let toggle = move |_| {
         opened.update(|o| {
             if !o.remove(&seq) {
@@ -306,19 +345,31 @@ fn WorkGroup(seq: u64, tools: Vec<Item>, thread: String, partial: RwSignal<BTree
         <div class="work" class:open=open>
             <button class="work-head" on:click=toggle aria-expanded=move || open().to_string()>
                 <Icon name="chevron-right" size=12 class="chev"/>
-                <span>{if running { "Working" } else { "Worked" }}{format!(" · {n} step{}", if n == 1 { "" } else { "s" })}</span>
-                <span class="work-what truncate">{format!("· {what}")}</span>
-                {(failed > 0).then(|| view! { <span class="neg">{format!("· {failed} failed")}</span> })}
-                {running.then(|| view! { <span class="spin-dot" aria-label="Running"/> })}
+                <span>{move || { let (n, _) = summary(); format!("{} · {n} step{}", if running.get() { "Working" } else { "Worked" }, if n == 1 { "" } else { "s" }) }}</span>
+                <span class="work-what truncate">{move || format!("· {}", summary().1)}</span>
+                {move || (failed() > 0).then(|| view! { <span class="neg">{format!("· {} failed", failed())}</span> })}
+                <Show when=move || running.get()><span class="spin-dot" aria-label="Running"/></Show>
             </button>
             <Show when=open>
-                <div class="work-steps">{tools.clone().into_iter().map(|it| {
-                    let key = if let Item::Tool { item, .. } = &it { format!("tool:{item}") } else { String::new() };
-                    let live = Signal::derive(move || partial.with(|p| p.get(&key).map(|x| x.text.clone())));
-                    view! { <ToolRow item=it thread=thread.clone() live=live/> }
-                }).collect_view()}</div>
+                <div class="work-steps">
+                    <Show when=move || hidden() != 0>
+                        <button class="work-more" on:click=move |_| opened.update(|o| { o.insert(seq); })>{move || format!("{} earlier", hidden())}</button>
+                    </Show>
+                    <For each=move || { let h = hidden(); tools.with(|t| t[h.min(t.len())..].to_vec()) } key=|i| i.key() let:it>
+                        {match it {
+                            Item::Thinking { seq, text } => view! {
+                                <details class="thinking" id=format!("ev-{seq}")><summary>"Thinking"</summary><div class="thinking-text">{text}</div></details>
+                            }.into_any(),
+                            it => {
+                                let key = if let Item::Tool { item, .. } = &it { format!("tool:{item}") } else { String::new() };
+                                let live = Signal::derive(move || partial.with(|p| p.get(&key).map(|x| x.text.clone())));
+                                view! { <ToolRow item=it thread=thread.get_value() live=live/> }.into_any()
+                            }
+                        }}
+                    </For>
+                </div>
             </Show>
-            {(!cards.is_empty()).then(|| view! { <div class="rich-cards">{cards.into_iter().map(|r| view! { <RichCard r=r/> }).collect_view()}</div> })}
+            {move || { let c = cards(); (!c.is_empty()).then(|| view! { <div class="rich-cards">{c.into_iter().map(|r| view! { <RichCard r=r/> }).collect_view()}</div> }) }}
         </div>
     }
 }
@@ -527,7 +578,7 @@ pub fn Timeline(
                         Item::Thinking { seq, text } => view! {
                             <details class="thinking" id=format!("ev-{seq}")><summary>"Thinking"</summary><div class="thinking-text">{text}</div></details>
                         }.into_any(),
-                        Item::Work { seq, tools } => view! { <WorkGroup seq=seq tools=tools thread=th partial=partial opened=opened/> }.into_any(),
+                        Item::Work { seq, .. } => view! { <WorkGroup seq=seq items=items thread=th partial=partial opened=opened/> }.into_any(),
                         Item::Tool { .. } => ().into_any(),
                         Item::Plan { entries, .. } => view! {
                             <div class="plan">{entries.into_iter().map(|e| view! {
