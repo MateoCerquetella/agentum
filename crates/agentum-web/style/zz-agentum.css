@@ -95,20 +95,37 @@
 .dk-proj-h { display: flex; align-items: center; }
 .dk-proj-btn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; }
 .dk-proj-btn:hover { background: var(--hl); }
-.dk-init { flex: none; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 6px; background: var(--hl); color: var(--hi); font-size: 10.5px; font-weight: 700; }
+.dk-init { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; border: 1px solid rgb(0 0 0 / .15); box-shadow: 0 1px 2px rgb(0 0 0 / .05); background: var(--hl); color: var(--hi); font-size: 10.5px; font-weight: 600; text-transform: uppercase; }
+
+/* Dockside 0.1.8's status marks and its default palette. */
+.dk { --dk-working: #d99b00; --dk-waiting: #f58220; --dk-unread: #34a853; --dk-error: #d94b4b; --dk-inactive: #a1a8b3; --dk-stale: #69717d; }
+.dk-mark { flex: none; width: 16px; height: 16px; display: inline-grid; place-items: center; }
+.dk-mark-working { color: var(--dk-working); }
+.dk-mark-working svg { stroke-width: 2.5; }
+.dk-mark-needs-you { color: var(--dk-waiting); }
+.dk-mark-failed { color: var(--dk-error); }
+.dk-mark-unread { color: var(--dk-unread); }
+.dk-mark-inactive { color: var(--dk-inactive); }
+.dk-mark-stale { color: var(--dk-stale); }
+.dk-mark-dot { width: 8px; height: 8px; border-radius: 99px; background: var(--dk-inactive); opacity: .5; }
+@keyframes dk-spin { to { transform: rotate(360deg); } }
+@keyframes dk-attention { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+@keyframes dk-arrive { from { transform: scale(.75); opacity: .4; } 65% { transform: scale(1.12); opacity: 1; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: no-preference) {
+  .dk-mark-working { animation: dk-spin 1s linear infinite; }
+  .dk-mark-needs-you, .dk-mark-failed { animation: dk-attention 2.4s ease-in-out infinite; }
+  .dk-mark-unread { animation: dk-arrive 350ms ease-out; }
+}
+.dk-r1, .dk-r2 { display: flex; align-items: center; justify-content: flex-end; gap: 6px; height: 16px; }
+.dk-r2 { margin-top: 2px; }
+.dk-agent { flex: none; display: inline-grid; place-items: center; color: var(--subdue); }
+.dk-kids-btn { display: inline-flex; align-items: center; gap: 2px; height: 16px; padding: 0 2px; border: 0; border-radius: 4px; background: transparent; color: var(--subdue); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; box-shadow: none; }
+.dk-kids-btn:hover { background: var(--hl); color: var(--hi); }
+.dk-card.receded .dk-title { color: color-mix(in srgb, var(--subdue) 65%, transparent); }
+.dk-card.receded .dk-l2 { opacity: .8; }
 .dk-proj-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--hi); }
 .dk-proj-new { opacity: 0; width: 24px; height: 24px; }
 .dk-proj-h:hover .dk-proj-new { opacity: 1; }
-.dk-dots { display: inline-flex; align-items: center; gap: 4px; }
-/* Dockside's status colours (its default palette), one per state. */
-.dk-proj, .dk-li, .dk-slim { --dk-working: #facc15; --dk-waiting: #fb923c; --dk-unread: #5ba4e6; --dk-error: #e5484d; }
-html[data-scheme="light"] :is(.dk-proj, .dk-li, .dk-slim) { --dk-working: #ca8a04; --dk-waiting: #ea580c; --dk-unread: #2563eb; --dk-error: #dc2626; }
-@keyframes dk-spin { to { transform: rotate(360deg); } }
-.dk-dot { width: 7px; height: 7px; border-radius: 99px; }
-.dk-dot.ask { background: var(--dk-waiting); }
-.dk-dot.work { width: 11px; height: 11px; display: grid; place-items: center; color: var(--dk-working); animation: dk-spin 1s linear infinite; }
-.dk-dot.work svg, .dk-g-work svg { stroke-width: 2; }
-.dk-dot.unread { border: 2px solid var(--dk-unread); }
 .dk-chev { color: var(--subdue); transition: transform .15s; }
 .dk-chev.open { transform: rotate(180deg); }
 .dk-list { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -118,19 +135,7 @@ html[data-scheme="light"] :is(.dk-proj, .dk-li, .dk-slim) { --dk-working: #ca8a0
 .dk-card.on { background: var(--hl); }
 .dk-hit { position: absolute; inset: 0; border: 0; background: transparent; border-radius: inherit; cursor: pointer; }
 .dk-card > :not(.dk-hit):not(.hover-card), .dk-slim > :not(.dk-hit) { position: relative; pointer-events: none; }
-.dk-card .dk-park, .dk-card .dk-park *, .dk-slim .dk-restore, .dk-slim .dk-restore * { pointer-events: auto; }
-.dk-g { flex: none; width: 14px; height: 14px; margin-top: 2px; border-radius: 99px; display: grid; place-items: center; color: var(--subdue); }
-.dk-g-ask { color: var(--dk-waiting); }
-.dk-g-fail { color: var(--dk-error); }
-.dk-g-work { color: var(--dk-working); animation: dk-spin 1s linear infinite; }
-.dk-g-unread { color: var(--dk-unread); }
-.dk-g-ask svg, .dk-g-fail svg, .dk-g-unread svg { stroke-width: 2; }
-/* Dockside's status pill: the state's colour on a tint of itself. */
-.dk-pill { --c: var(--subdue); padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 600; line-height: 16px; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
-.dk-pill.work { --c: var(--dk-working); }
-.dk-pill.ask { --c: var(--dk-waiting); }
-.dk-pill.fail { --c: var(--dk-error); }
-.dk-pill.unread { --c: var(--dk-unread); }
+.dk-card .dk-park, .dk-card .dk-park *, .dk-card .dk-kids-btn, .dk-card .dk-kids-btn *, .dk-slim .dk-restore, .dk-slim .dk-restore * { pointer-events: auto; }
 .dk-body { flex: 1; min-width: 0; }
 .dk-l1 { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .dk-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--base); }
@@ -139,7 +144,6 @@ html[data-scheme="light"] :is(.dk-proj, .dk-li, .dk-slim) { --dk-working: #ca8a0
 .dk-pin { color: var(--subdue); flex: none; }
 .dk-l2 { display: flex; align-items: center; gap: 6px; margin-top: 2px; height: 16px; min-width: 0; overflow: hidden; color: var(--subdue); font-size: 11px; white-space: nowrap; }
 .dk-branch { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
-.dk-kidsn { margin-left: auto; padding: 0 5px; border-radius: 5px; background: var(--hl); color: var(--base); font-size: 10px; }
 .dk-right { flex: none; width: 64px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .dk-status { font-size: 11px; color: var(--subdue); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dk-card.unread .dk-status { color: var(--text); }
@@ -151,7 +155,6 @@ html[data-scheme="light"] :is(.dk-proj, .dk-li, .dk-slim) { --dk-working: #ca8a0
 .dk-slim { position: relative; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 8px; cursor: pointer; }
 .dk-slim:hover { background: color-mix(in srgb, var(--hl) 70%, transparent); }
 .dk-slim.on { background: var(--hl); }
-.dk-slim .dk-g { margin-top: 0; }
 .dk-slim.hit { height: auto; flex-direction: column; align-items: stretch; gap: 1px; padding: 6px 8px; }
 .dk-excerpt { font-size: 11px; color: var(--subdue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dk-excerpt mark { background: color-mix(in srgb, var(--primary) 30%, transparent); color: var(--hi); border-radius: 2px; }
@@ -167,7 +170,7 @@ html[data-scheme="light"] :is(.dk-proj, .dk-li, .dk-slim) { --dk-working: #ca8a0
 .sidebar:not(.collapsed) { width: 280px; }
 @media (max-width: 760px) { .sidebar:not(.collapsed) { width: 86vw; } }
 .dk-right { width: auto; min-width: 34px; max-width: 84px; }
-.dk-l2 > span:not(.dk-branch):not(.dk-kidsn) { flex: none; }
+.dk-l2 > span:not(.dk-branch) { flex: none; }
 .pane-head .title { flex: 0 1 auto; max-width: 70%; }
 .pane-sub { flex: 1 1 0; }
 .pane-head .grow { flex: 0 0 0; }

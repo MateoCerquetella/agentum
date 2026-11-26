@@ -96,7 +96,7 @@ fn Spinner(#[prop(into)] class: String, size: u32) -> impl IntoView {
             }
         })
     });
-    view! { <span node_ref=el class=class title="Working"><Icon name="loading" size=size/></span> }
+    view! { <span node_ref=el class=class title=Mark::Working.label()><Icon name="loading" size=size/></span> }
 }
 
 /// Whether it found an animation to pin.
@@ -111,33 +111,76 @@ fn pin_to_timeline(el: &web_sys::Element) -> bool {
     list.length() > 0
 }
 
-/// The glyph before a title, Dockside's: failed (circle-x), needs you (circle-question), working
-/// (spins), unread (an eye), else the agent.
-#[component]
-fn Glyph(t: ThreadSummary) -> impl IntoView {
-    if needs_you(&t) {
-        let failed = t.state == ThreadState::Error;
-        let (class, icon, title) = if failed { ("dk-g dk-g-fail", "x-circle", "Stopped with an error") } else { ("dk-g dk-g-ask", "help", "Needs you") };
-        view! { <span class=class title=title><Icon name=icon size=14/></span> }.into_any()
-    } else if working(&t) {
-        view! { <Spinner class="dk-g dk-g-work" size=14/> }.into_any()
-    } else if t.unread {
-        view! { <span class="dk-g dk-g-unread" title="Unread"><Icon name="eye" size=14/></span> }.into_any()
+/// Dockside's status for a thread family, most urgent first.
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    Failed,
+    NeedsYou,
+    Working,
+    Unread,
+    Inactive,
+    Stale,
+}
+
+const STALE_MS: i64 = 7 * 24 * 3600 * 1000;
+
+fn mark_of(ts: &[&ThreadSummary], now: i64) -> Mark {
+    if ts.iter().any(|t| needs_you(t) && t.state == ThreadState::Error) {
+        Mark::Failed
+    } else if ts.iter().any(|t| needs_you(t)) {
+        Mark::NeedsYou
+    } else if ts.iter().any(|t| working(t)) {
+        Mark::Working
+    } else if ts.iter().any(|t| t.unread) {
+        Mark::Unread
+    } else if now - ts.iter().map(|t| t.updated_at).max().unwrap_or(now) >= STALE_MS {
+        Mark::Stale
     } else {
-        view! { <span class="dk-g dk-g-agent"><Icon name=agent_icon(t.agent) size=12/></span> }.into_any()
+        Mark::Inactive
     }
 }
 
-/// Dockside's coloured status pill under the time: (class, label).
-fn pill(t: &ThreadSummary) -> Option<(&'static str, &'static str)> {
-    if needs_you(t) {
-        Some(if t.state == ThreadState::Error { ("dk-pill fail", "Failed") } else { ("dk-pill ask", "Needs you") })
-    } else if working(t) {
-        Some(("dk-pill work", "Working"))
-    } else if t.unread {
-        Some(("dk-pill unread", "Unread"))
-    } else {
-        None
+impl Mark {
+    fn label(self) -> &'static str {
+        match self {
+            Mark::Failed => "Failed: work stopped with an error and may need attention.",
+            Mark::NeedsYou => "Needs you: waiting for your response before work can continue.",
+            Mark::Working => "Working: work is actively running in this thread.",
+            Mark::Unread => "Unread: this thread has activity you have not read.",
+            Mark::Inactive => "Inactive: no work is currently active.",
+            Mark::Stale => "Stale: no activity for seven days or more.",
+        }
+    }
+    fn receded(self) -> bool {
+        matches!(self, Mark::Inactive | Mark::Stale)
+    }
+}
+
+/// Dockside's status mark: the spinner, a filled circle with a cut-out (!, x or a tick), or a
+/// clock/hourglass for a quiet thread. `dot` draws a quiet child as Dockside does, a faint dot.
+#[component]
+fn StatusMark(mark: Mark, #[prop(optional)] dot: bool) -> impl IntoView {
+    let title = mark.label();
+    let filled = |kind: &'static str, cut: &'static str| {
+        let id = format!("dk-cut-{kind}");
+        view! {
+            <span class=format!("dk-mark dk-mark-{kind}") title=title>
+                <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+                    <mask id=id.clone()><rect width="20" height="20" fill="white"/><path d=cut fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></mask>
+                    <circle cx="10" cy="10" r="8.5" fill="currentColor" mask=format!("url(#{id})")/>
+                </svg>
+            </span>
+        }
+        .into_any()
+    };
+    match mark {
+        Mark::Working => view! { <Spinner class="dk-mark dk-mark-working" size=16/> }.into_any(),
+        Mark::Failed => filled("failed", "m7 7 6 6m0-6-6 6"),
+        Mark::NeedsYou => filled("needs-you", "M10 5.5v5M10 14h0"),
+        Mark::Unread => filled("unread", "m6.3 10 2.4 2.5 5-5"),
+        Mark::Inactive if dot => view! { <span class="dk-mark" title=title><i class="dk-mark-dot"/></span> }.into_any(),
+        Mark::Inactive => view! { <span class="dk-mark dk-mark-inactive" title=title><Icon name="clock" size=14/></span> }.into_any(),
+        Mark::Stale => view! { <span class="dk-mark dk-mark-stale" title=title><Icon name="hourglass" size=14/></span> }.into_any(),
     }
 }
 
@@ -233,9 +276,12 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
     let t_menu = t.clone();
     let has_kids = !kids.is_empty();
     let kids_open = RwSignal::new(true);
+    let n_kids = kids.len();
+    let mark = mark_of(&std::iter::once(&t).chain(kids.iter()).collect::<Vec<_>>(), agentum_ui::fmt::now_ms());
+    let agent = agent_icon(t.agent);
     view! {
         <li class="dk-li">
-            <div class=move || format!("dk-card{}{}", if is_on.get() { " on" } else { "" }, if t.unread || needs_you(&t) { " unread" } else { "" })
+            <div class=move || format!("dk-card{}{}{}", if is_on.get() { " on" } else { "" }, if t.unread { " unread" } else { "" }, if mark.receded() { " receded" } else { "" })
                 draggable="true"
                 on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", &id_drag)])
                 on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))
@@ -243,15 +289,15 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                 on:mouseleave=move |_| { let _ = timer.try_set_value(None); let _ = hover.try_set(false); }>
                 <a class="dk-hit" href=format!("/code?thread={}", id_click) data-thread=id_click.clone() aria-label=title.clone() draggable="false"
                     on:click=move |e: leptos::ev::MouseEvent| row_click(e, &id_click)/>
-                <Glyph t=t.clone()/>
                 <div class="dk-body">
                     <div class="dk-l1">
                         <span class="dk-title">{title.clone()}</span>
                         {t.pinned.then(|| view! { <Icon name="pin" size=11 class="dk-pin"/> })}
                     </div>
-                    <div class="dk-l2">{meta}{badges}{has_kids.then(|| view! { <span class="dk-kidsn" title="Side chats">{kids.len()}</span> })}</div>
+                    <div class="dk-l2">{meta}{badges}</div>
                 </div>
                 <div class="dk-right">
+                    <div class="dk-r1">
                     <span class=if can_park { "dk-status can-park" } else { "dk-status" }>{ago_ms(t.updated_at)}</span>
                     {can_park.then(|| view! {
                         <span class="dk-park">
@@ -259,7 +305,18 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                             <button class="icon-btn" title="Settle (done; archived, shown for a day)" on:click=move |_| patch_thread(&id_settle, PatchThread { archived: Some(true), ..Default::default() })><Icon name="check" size=13/></button>
                         </span>
                     })}
-                    {pill(&t).map(|(class, label)| view! { <span class=class>{label}</span> })}
+                    </div>
+                    <div class="dk-r2">
+                        {has_kids.then(|| view! {
+                            <button class="dk-kids-btn" aria-expanded=move || kids_open.get().to_string() title=move || if kids_open.get() { format!("Hide {n_kids} side chats") } else { format!("Show {n_kids} side chats") }
+                                on:click=move |_| kids_open.update(|o| *o = !*o)>
+                                <Icon name="chevron" size=12 class=Signal::derive(move || if kids_open.get() { "dk-chev open".to_string() } else { "dk-chev".to_string() })/>
+                                <span>{n_kids}</span>
+                            </button>
+                        })}
+                        <span class="dk-agent"><Icon name=agent size=13/></span>
+                        <StatusMark mark=mark/>
+                    </div>
                 </div>
                 {move || hover.get().then(|| {
                     let views = crate::plugins::thread_hover(&t_hover);
@@ -295,9 +352,10 @@ fn Slim(t: ThreadSummary, on: Signal<Option<String>>, on_r: Signal<Option<String
             on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))>
             <a class="dk-hit" href=format!("/code?thread={}", id_c) data-thread=id_c.clone() draggable="false"
                 on:click=move |e: leptos::ev::MouseEvent| row_click(e, &id_c)/>
-            <Glyph t=t.clone()/>
+            <span class="dk-agent"><Icon name=agent_icon(t.agent) size=13/></span>
             <span class="dk-title">{if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() }}</span>
             <span class="dk-status">{when}</span>
+            <StatusMark mark=mark_of(&[&t], agentum_ui::fmt::now_ms()) dot=true/>
             {restore.map(|r| view! {
                 <button class="icon-btn dk-restore" title=if r == "snooze" { "Wake it now" } else { "Unsettle" }
                     on:click=move |_| patch_thread(&id_r, if r == "snooze" { PatchThread { snoozed_until: Some(None), ..Default::default() } } else { PatchThread { archived: Some(false), ..Default::default() } })>
@@ -313,8 +371,6 @@ fn Project(path: String, fam: Vec<(ThreadSummary, Vec<ThreadSummary>)>, on: Sign
     let key = format!("agentum.dk.fold.{path}");
     let open = RwSignal::new(agentum_ui::store::get(&key).as_deref() != Some("1"));
     let name = project_name(&path);
-    let all: Vec<&ThreadSummary> = fam.iter().flat_map(|(r, k)| std::iter::once(r).chain(k.iter())).collect();
-    let (asks, work, unread) = (all.iter().any(|t| needs_you(t)), all.iter().any(|t| working(t)), all.iter().any(|t| t.unread));
     let n = fam.len();
     let machine = fam.first().map(|(r, _)| r.machine.clone()).unwrap_or_default();
     let (p2, m2) = (path.clone(), machine.clone());
@@ -328,11 +384,6 @@ fn Project(path: String, fam: Vec<(ThreadSummary, Vec<ThreadSummary>)>, on: Sign
                     <span class="dk-init" style=badge>{letter}</span>
                     <span class="dk-proj-name">{name.clone()}</span>
                     <span class="dk-count">{n}</span>
-                    <span class="dk-dots">
-                        {asks.then(|| view! { <span class="dk-dot ask"/> })}
-                        {work.then(|| view! { <Spinner class="dk-dot work" size=11/> })}
-                        {unread.then(|| view! { <span class="dk-dot unread"/> })}
-                    </span>
                     <Icon name="chevron" size=12 class=Signal::derive(move || if open.get() || force { "dk-chev open".to_string() } else { "dk-chev".to_string() })/>
                 </button>
                 <button class="icon-btn dk-proj-new" title=format!("New thread in {name} · drag to a side of the window") draggable="true"
