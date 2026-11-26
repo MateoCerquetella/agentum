@@ -16,7 +16,7 @@
 .timeline .msg .md th, .timeline .msg .md td { border: 1px solid var(--border); padding: 3px 8px; }
 .timeline .msg-meta { font-size: 11px; color: var(--subdue); margin-top: 2px; display: flex; gap: 8px; }
 .timeline .streaming-text { white-space: pre-wrap; }
-.timeline .thinking, .timeline .plan, .timeline .tool, .timeline .ask-card, .timeline .turn-foot, .timeline .notice, .timeline .err, .timeline .working-line { max-width: 860px; width: 100%; margin: 0 auto; }
+.timeline .thinking, .timeline .plan, .timeline .tool, .timeline .work, .timeline .ask-card, .timeline .turn-foot, .timeline .notice, .timeline .err, .timeline .working-line { max-width: 860px; width: 100%; margin: 0 auto; }
 .timeline .thinking { color: var(--subdue); font-size: 12px; }
 .timeline .thinking summary { cursor: pointer; }
 .timeline .thinking-text { white-space: pre-wrap; padding: 4px 0 4px 12px; border-left: 2px solid var(--border); }
@@ -57,10 +57,11 @@ pre.diff .diff-file { color: var(--hi); font-weight: 600; }
 .code-new .pickers { flex-wrap: wrap; }
 .code-new .pickers .pick { min-width: 0; flex: 0 1 auto; }
 /* Cards a command's output turns into (code/rich.rs): tests, changed files, commits, errors. */
-.timeline .rich-cards { max-width: 860px; width: 100%; margin: -4px auto 0; display: grid; gap: 6px; }
+.work .rich-cards { margin-top: 6px; display: grid; gap: 6px; }
 .rich { background: var(--widget); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; font-size: 12.5px; min-width: 0; animation: rich-in .25s ease-out; }
 .rich.bad { border-color: color-mix(in srgb, var(--negative) 45%, var(--border)); }
 .rich-head { display: flex; align-items: center; gap: 6px; color: var(--hi); }
+.rich-head b { font-weight: 500; }
 .rich-head svg { color: var(--primary); }
 .rich-head svg.pos { color: var(--positive); } .rich-head svg.neg { color: var(--negative); }
 .rich-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--subdue); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -84,3 +85,15 @@ code.chip-sha { color: var(--primary); }
 code.chip-file::before { content: "◇ "; color: var(--primary); }
 @keyframes rich-in { from { opacity: 0; transform: scale(.97); } }
 @media (prefers-reduced-motion: reduce) { .rich { animation: none; } }
+/* Tool calls in a row: one quiet line that opens to the steps (code/timeline.rs WorkGroup). */
+.work-head { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin-left: -6px; padding: 3px 6px; border: 0; border-radius: 8px; background: none; color: var(--subdue); font-size: 12.5px; text-align: left; }
+.work-head:hover { background: var(--hl); color: var(--text); }
+.work-head .chev { flex-shrink: 0; transition: transform .15s; }
+.work.open .work-head .chev { transform: rotate(90deg); }
+.work-what { opacity: .75; min-width: 0; }
+.work-steps { display: grid; gap: 1px; margin: 2px 0 0 5px; padding-left: 9px; border-left: 1px solid var(--border); animation: rich-in .2s ease-out; }
+.work .tool { border: 0; background: none; border-radius: 6px; }
+.work .tool-head { padding: 2px 6px; color: var(--subdue); }
+.work .tool-name { font-weight: 400; color: var(--text); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.work .tool.tool-bad .tool-name { color: var(--negative); }
+.work .tool-out { border: 1px solid var(--border); border-radius: 6px; margin: 2px 0 4px; }
