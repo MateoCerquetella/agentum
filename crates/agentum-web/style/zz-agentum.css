@@ -101,7 +101,7 @@
 .dk-proj-h:hover .dk-proj-new { opacity: 1; }
 .dk-dots { display: inline-flex; align-items: center; gap: 4px; }
 /* Dockside's status colours (its default palette), one per state. */
-.dk-proj, .dk-li, .dk-slim { --dk-working: #34a853; --dk-waiting: #f5a524; --dk-unread: #5ba4e6; --dk-error: #e5484d; }
+.dk-proj, .dk-li, .dk-slim { --dk-working: #facc15; --dk-waiting: #fb923c; --dk-unread: #5ba4e6; --dk-error: #e5484d; }
 @keyframes dk-spin { to { transform: rotate(360deg); } }
 .dk-dot { width: 7px; height: 7px; border-radius: 99px; }
 .dk-dot.ask { background: var(--dk-waiting); }
