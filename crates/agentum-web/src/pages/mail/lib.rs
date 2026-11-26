@@ -129,13 +129,14 @@ pub struct Account {
 pub struct Counts {
     pub unread: BTreeMap<String, u64>,
     pub total: u64,
+    /// Everything in each account's Junk, and in all of them.
+    pub junk: BTreeMap<String, u64>,
+    pub junk_total: u64,
 }
 impl Counts {
     pub fn of(v: &Value) -> Counts {
-        Counts {
-            unread: v["unread"].as_object().map(|o| o.iter().map(|(k, n)| (k.clone(), n.as_u64().unwrap_or(0))).collect()).unwrap_or_default(),
-            total: v["total"].as_u64().unwrap_or(0),
-        }
+        let per = |k: &str| v[k].as_object().map(|o| o.iter().map(|(k, n)| (k.clone(), n.as_u64().unwrap_or(0))).collect()).unwrap_or_default();
+        Counts { unread: per("unread"), total: v["total"].as_u64().unwrap_or(0), junk: per("junk"), junk_total: v["junk_total"].as_u64().unwrap_or(0) }
     }
     pub fn of_account(&self, a: &str) -> u64 {
         if a.is_empty() { self.total } else { self.unread.get(a).copied().unwrap_or(0) }

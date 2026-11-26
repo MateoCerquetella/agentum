@@ -163,6 +163,8 @@ html[data-theme="studio"] .ucard-bar { background: var(--muted); }
 .side-mail .nav.side-mbox { gap: 8px; padding-top: 4px; padding-bottom: 4px; font-size: 13px; }
 .side-mail .nav.side-mbox.sub { padding-left: 24px; }
 .side-mail .nav.side-mbox svg.fill { fill: currentColor; }
+/* Junk: a count to know about, not to act on. */
+.side-mail .nav .count.quiet, html[data-theme] .side-mail .nav .count.quiet { background: transparent; color: var(--subdue); opacity: .7; font-weight: 400; }
 .side-mail-acct { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 4px 10px 2px 8px; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; text-align: left; font: inherit; font-size: 12px; font-weight: 500; color: var(--subdue); cursor: pointer; }
 .side-mail-acct:hover, .side-mail-acct.here { color: var(--hi); }
 .side-mail-acct > svg { flex: none; transform: rotate(-90deg); transition: transform .15s; }

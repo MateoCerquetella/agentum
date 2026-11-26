@@ -1,9 +1,10 @@
 //! Mail › Inbox: the filter bar (the folders are in the app's sidebar, side.rs), the select bar and the
-//! list grouped into Pinned / Important / Updates / Newsletters when nothing narrows it. Also the
+//! list: one list, newest first, or (Grouped) Pinned / Important / Updates / Newsletters when nothing narrows it. Also the
 //! row (one conversation) and the two-click confirm button the tabs share.
 use super::lib::*;
-use super::{use_mail, Filter, List, Reading};
+use super::{use_mail, Filter, List, Reading, UNREAD_KEY, VIEW_KEY};
 use agentum_ui::prelude::*;
+use agentum_ui::store;
 use std::collections::{BTreeSet, HashSet};
 
 /// A button that asks once more ("Delete?") before it acts; it disarms after 4 s.
@@ -78,6 +79,7 @@ pub fn Inbox(msgs: List, f: RwSignal<Filter>, set_f: Callback<Filter>, with_nav:
     let c = use_mail();
     let q = RwSignal::new(f.get_untracked().q);
     let open_groups = RwSignal::new(BTreeSet::<&'static str>::new());
+    let view_grouped = RwSignal::new(store::get(VIEW_KEY).as_deref() == Some("grouped"));
     let tq = StoredValue::new(None::<send_wrapper::SendWrapper<gloo_timers::callback::Timeout>>);
     let search = move |v: String| {
         q.set(v.clone());
@@ -95,7 +97,7 @@ pub fn Inbox(msgs: List, f: RwSignal<Filter>, set_f: Callback<Filter>, with_nav:
             threads(&ms)
         })
     });
-    let grouped = move || f.with(|x| x.folder == "inbox" && x.cat.is_empty() && x.q.is_empty());
+    let grouped = move || view_grouped.get() && f.with(|x| x.folder == "inbox" && x.cat.is_empty() && x.q.is_empty());
     let groups = Memo::new(move |_| {
         if !grouped() {
             return None;
@@ -153,12 +155,23 @@ pub fn Inbox(msgs: List, f: RwSignal<Filter>, set_f: Callback<Filter>, with_nav:
                     <AccountSelect value=Signal::derive(move || f.with(|x| x.account.clone())) on_change=Callback::new(move |v| { let mut x = f.get_untracked(); x.account = v; set_f.run(x) })/>
                 </Show>
                 <input type="search" class="ml-search grow" placeholder="Search sender or subject (/)" prop:value=q on:input=move |e| search(event_target_value(&e))/>
+                <div class="ml-seg" role="group" aria-label="Show" title="Mail opens on what you pick here">
+                    {[(false, "All"), (true, "Unread")].into_iter().map(|(u, l)| view! {
+                        <button type="button" aria-pressed=move || f.with(|x| x.unread == u).to_string() on:click=move |_| { store::set(UNREAD_KEY, if u { "1" } else { "0" }); let mut x = f.get_untracked(); x.unread = u; set_f.run(x) }>
+                            {l}{u.then(|| view! { <b class="ml-seg-n">{move || { let n = unread_n(); (n > 0).then(|| format!(" {n}")) }}</b> })}
+                        </button>
+                    }).collect_view()}
+                </div>
+                <Show when=move || f.with(|x| x.folder == "inbox")>
+                    <div class="ml-seg" role="group" aria-label="Layout">
+                        {[(false, "List", "One list, newest first"), (true, "Grouped", "Pinned, Important, Updates and Newsletters")].into_iter().map(|(g, l, t)| view! {
+                            <button type="button" title=t aria-pressed=move || (view_grouped.get() == g).to_string() on:click=move |_| { view_grouped.set(g); store::set(VIEW_KEY, if g { "grouped" } else { "list" }) }>{l}</button>
+                        }).collect_view()}
+                    </div>
+                </Show>
             </div>
             <Show when=move || !with_nav.get()>
                 <div class="ml-chips">
-                    <button type="button" class="ml-chip" aria-pressed=move || f.with(|x| x.unread).to_string() on:click=move |_| set(|x| x.unread = !x.unread)>
-                        <Icon name="circle" size=12 class="fill"/>"Unread "<b>{unread_n}</b>
-                    </button>
                     <button type="button" class="ml-chip" aria-pressed=move || f.with(|x| x.cat.is_empty()).to_string() on:click=move |_| set(|x| x.cat.clear())>"All"</button>
                     {CAT.iter().map(|(k, l)| { let k = *k; view! {
                         <button type="button" class="ml-chip" aria-pressed=move || f.with(|x| x.cat == k).to_string() on:click=move |_| { let mut x = f.get_untracked(); x.cat = k.into(); set_f.run(x) }>{*l}</button>

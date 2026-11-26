@@ -41,21 +41,26 @@ pub async fn inbox(app: &App, iq: &InboxQuery) -> anyhow::Result<Vec<Value>> {
     Ok(out.iter().map(|m| m.view(&names)).collect())
 }
 
-/// Unread in each inbox, and the important ones.
+/// Unread in each inbox, the important ones, and what's in each Junk folder.
 pub async fn counts(app: &App) -> anyhow::Result<Value> {
     let accts = account::accounts(app).await?;
-    let mut unread = serde_json::Map::new();
-    let mut total = 0;
+    let (mut unread, mut junk) = (serde_json::Map::new(), serde_json::Map::new());
+    let (mut total, mut junk_total) = (0, 0);
     for a in accts.iter().filter(|a| a.usable()) {
         let n = cache::count(app, "SELECT count(*) FROM msg WHERE account=?1 AND folder='INBOX' AND flags NOT LIKE '%Seen%'", args(&[&a.id])).await?;
         total += n;
         unread.insert(a.id.clone(), json!(n));
+        if let Some(f) = rules::role(app, &a.id, "junk").await {
+            let j = cache::count(app, "SELECT count(*) FROM msg WHERE account=?1 AND folder=?2", args(&[&a.id, &f])).await?;
+            junk_total += j;
+            junk.insert(a.id.clone(), json!(j));
+        }
     }
     let q = quiet(app);
     let important = cache::count(app, &format!("SELECT count(*) FROM msg WHERE folder='INBOX' AND flags NOT LIKE '%Seen%' AND category NOT IN ({})", placeholders(1, q.len())),
         q.into_iter().map(Sql::from).collect()).await?;
     let names: serde_json::Map<String, Value> = accts.into_iter().map(|a| (a.id, json!(a.name))).collect();
-    Ok(json!({"unread": unread, "total": total, "important": important, "names": names}))
+    Ok(json!({"unread": unread, "total": total, "junk": junk, "junk_total": junk_total, "important": important, "names": names}))
 }
 
 /// Unread inbox mail newer than `since` that deserves a notification (≤20).

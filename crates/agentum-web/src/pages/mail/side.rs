@@ -46,14 +46,15 @@ pub fn Folders() -> impl IntoView {
                 on:click=move |_| { let a = a.clone(); pick(Box::new(move |f| { f.account = a.clone(); f.folder = folder.into(); f.unread = unread; })) }>
                 <Icon name=icon size=15 class=if icon == "circle" { "fill" } else { "" }/>
                 <span class="truncate">{label}</span>
-                {count.map(|n| view! { <Show when=move || { n.get() > 0 }><span class="count">{move || n.get()}</span></Show> })}
+                {count.map(|n| view! { <Show when=move || { n.get() > 0 }><span class=if folder == "junk" { "count quiet" } else { "count" }>{move || n.get()}</span></Show> })}
             </button>
         }
     };
     let total = Signal::derive(move || sh.counts.with(|c| c.total));
+    let junk_total = Signal::derive(move || sh.counts.with(|c| c.junk_total));
     view! {
         <div class="side-mail" role="group" aria-label="Mail folders">
-            {BOXES.iter().map(|b| mailbox(String::new(), *b, (b.0 == "inbox").then_some(total))).collect_view()}
+            {BOXES.iter().map(|b| mailbox(String::new(), *b, match b.0 { "inbox" => Some(total), "junk" => Some(junk_total), _ => None })).collect_view()}
             {move || {
                 let accounts = sh.meta.with(|m| m.as_ref().map(|m| m.accounts.clone()).unwrap_or_default());
                 // One account: the mailboxes above are already its own.
@@ -75,7 +76,10 @@ pub fn Folders() -> impl IntoView {
                             <Show when=move || { n.get() > 0 }><span class="count">{move || n.get()}</span></Show>
                         </button>
                         <Show when=is_open>
-                            {let id = id5.clone(); BOXES.iter().map(move |b| mailbox(id.clone(), *b, (b.0 == "inbox").then_some(n))).collect_view()}
+                            {let id = id5.clone(); BOXES.iter().map(move |b| {
+                                let j = { let id = id.clone(); Signal::derive(move || sh.counts.with(|c| c.junk.get(&id).copied().unwrap_or(0))) };
+                                mailbox(id.clone(), *b, match b.0 { "inbox" => Some(n), "junk" => Some(j), _ => None })
+                            }).collect_view()}
                         </Show>
                     }
                 }).collect_view())

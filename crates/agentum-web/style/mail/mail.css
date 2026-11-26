@@ -48,6 +48,7 @@
 .ml-seg button { background: transparent; border: 0; padding: 4px 9px; color: var(--base); white-space: nowrap; }
 .ml-seg button + button { border-left: 1px solid var(--border); }
 .ml-seg button[aria-pressed=true] { background: var(--hl); color: var(--hi); }
+.ml-seg-n { font-weight: 600; }
 .ml-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .ml-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 99px; padding: 1px 9px; background: transparent; color: var(--base); font-size: 12px; white-space: nowrap; }
 .ml-chip:hover { color: var(--hi); }

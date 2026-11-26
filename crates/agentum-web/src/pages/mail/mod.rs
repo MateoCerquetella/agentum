@@ -89,9 +89,13 @@ pub struct Shared {
     /// The sidebar shows the folders now (Mail leaves out its own pickers).
     pub in_side: RwSignal<bool>,
 }
+/// Mail opens on Unread or All, whichever was last picked in the list's bar (this device).
+pub const UNREAD_KEY: &str = "cerq.mail.unread";
+/// The inbox as one list, newest first ("list"), or grouped by kind ("grouped").
+pub const VIEW_KEY: &str = "cerq.mail.view";
 thread_local! {
     static SHARED: Shared = Shared {
-        filter: agentum_ui::global(Filter { folder: "inbox".into(), ..Default::default() }),
+        filter: agentum_ui::global(Filter { folder: "inbox".into(), unread: agentum_ui::store::flag(UNREAD_KEY), ..Default::default() }),
         meta: agentum_ui::global(None),
         counts: agentum_ui::global(Counts::default()),
         in_side: agentum_ui::global(false),
